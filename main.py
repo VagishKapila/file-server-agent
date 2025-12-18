@@ -1,58 +1,86 @@
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
 import os
-import psycopg2
+import uuid
 from dotenv import load_dotenv
+import psycopg2
+from datetime import datetime
 
 load_dotenv()
 
 app = FastAPI()
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+# -----------------------------
+# Environment-safe upload root
+# -----------------------------
+IS_RAILWAY = os.getenv("RAILWAY_ENVIRONMENT") is not None
 
+BASE_UPLOAD_DIR = "/data/uploads" if IS_RAILWAY else "uploads"
+
+os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
+
+# -----------------------------
+# Database connection helper
+# -----------------------------
 def get_db():
-    return psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT", 5432)
-    )
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
 
+# -----------------------------
+# Upload endpoint
+# -----------------------------
 @app.post("/upload")
 async def upload_file(
     project_request_id: int = Form(...),
     file: UploadFile = File(...)
 ):
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    try:
+        project_dir = os.path.join(BASE_UPLOAD_DIR, "projects", str(project_request_id))
+        os.makedirs(project_dir, exist_ok=True)
 
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+        ext = os.path.splitext(file.filename)[1]
+        safe_name = f"{uuid.uuid4().hex}{ext}"
+        stored_path = os.path.join(project_dir, safe_name)
 
-    conn = get_db()
-    cur = conn.cursor()
+        contents = await file.read()
+        with open(stored_path, "wb") as f:
+            f.write(contents)
 
-    cur.execute(
-        """
-        INSERT INTO project_files
-        (project_request_id, filename, stored_path, file_type, file_size)
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (
-            project_request_id,
-            file.filename,
-            file_path,
-            file.content_type,
-            os.path.getsize(file_path)
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO project_files
+            (project_request_id, filename, stored_path, file_type, file_size, uploaded_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                project_request_id,
+                file.filename,
+                stored_path,
+                file.content_type,
+                len(contents),
+                datetime.utcnow(),
+            ),
         )
-    )
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        conn.commit()
+        cur.close()
+        conn.close()
 
-    return {
-        "status": "ok",
-        "filename": file.filename,
-        "path": file_path
-    }
+        public_url = f"/files/projects/{project_request_id}/{safe_name}"
+
+        return JSONResponse(
+            {
+                "status": "success",
+                "filename": file.filename,
+                "stored_path": stored_path,
+                "public_url": public_url,
+            }
+        )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)},
+        )
