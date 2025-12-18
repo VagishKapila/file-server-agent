@@ -23,7 +23,14 @@ os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 # Database connection helper
 # -----------------------------
 def get_db():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL not set")
+
+    return psycopg2.connect(
+        db_url,
+        sslmode="require"
+    )
 
 # -----------------------------
 # Upload endpoint
