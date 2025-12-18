@@ -84,3 +84,11 @@ async def upload_file(
             status_code=500,
             content={"status": "error", "message": str(e)},
         )
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
