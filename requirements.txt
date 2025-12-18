@@ -3,3 +3,6 @@ uvicorn
 python-multipart
 psycopg2-binary
 python-dotenv
+sqlalchemy>=2.0
+asyncpg
+greenlet>=3.0
