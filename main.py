@@ -7,6 +7,7 @@ from email.message import EmailMessage
 import urllib.request
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -15,6 +16,16 @@ logger = logging.getLogger("railway-webhook")
 
 app = FastAPI(title="Railway Webhook Relay")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # =====================================================
 # MODELS
