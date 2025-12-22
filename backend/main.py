@@ -5,6 +5,10 @@ app = FastAPI()
 
 app.include_router(negotiator_router)
 
+@app.get("/health")
+def health():
+    return {"ok": True}
+
 @app.get("/__fingerprint")
 def fingerprint():
     return {"status": "railway webhook server"}
