@@ -14,6 +14,9 @@ logger = logging.getLogger("railway-webhook")
 
 app = FastAPI(title="Railway Webhook Relay")
 
+# =====================================================
+# MODELS
+# =====================================================
 class BrowserEmailRequest(BaseModel):
     to_email: str
     attachments: list = []
@@ -39,13 +42,13 @@ def send_email_with_attachments(to_email, subject, body, attachments=None):
                 file_bytes,
                 maintype="application",
                 subtype="octet-stream",
-                filename=a.get("filename", "attachment")
+                filename=a.get("filename", "attachment"),
             )
 
             logger.info("📎 Attached: %s", a["url"])
 
         except Exception as e:
-            logger.error("❌ Attachment failed: %s | %s", a["url"], e)
+            logger.error("❌ Attachment failed: %s | %s", a.get("url"), e)
 
     with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT"))) as server:
         server.starttls()
@@ -53,7 +56,6 @@ def send_email_with_attachments(to_email, subject, body, attachments=None):
         server.send_message(msg)
 
     logger.info("✅ Email sent to %s", to_email)
-
 
 # =====================================================
 # HEALTH / SANITY
@@ -89,14 +91,14 @@ def attachment_test():
         attachments=[
             {
                 "filename": "sample.txt",
-                "url": "https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore"
+                "url": "https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore",
             }
-        ]
+        ],
     )
     return {"ok": True, "sent": True}
 
 # =====================================================
-# SMTP ONLY TEST (NO ATTACHMENTS)
+# SMTP ONLY TEST
 # =====================================================
 @app.get("/__smtp_test")
 def smtp_test():
@@ -116,7 +118,7 @@ def smtp_test():
         return {"ok": False, "error": str(e)}
 
 # =====================================================
-# VAPI / WAPI WEBHOOK (NOW SENDS EMAIL + ATTACHMENTS)
+# RETELL / VAPI WEBHOOK (CORRECT PARSING)
 # =====================================================
 @app.post("/negotiator/webhook")
 async def negotiator_webhook(request: Request):
@@ -124,23 +126,35 @@ async def negotiator_webhook(request: Request):
     logger.info("📥 WEBHOOK RECEIVED")
     logger.info(payload)
 
-    # ---- VAPI extraction (SAFE + MINIMAL) ----
-    email = None
-    attachments = []
+    call = payload.get("call", {})
+    analysis = call.get("call_analysis", {})
+    custom = analysis.get("custom_analysis_data", {})
 
-    try:
-        email = payload["call"]["artifact"]["structuredOutputs"][0]["output"].get("email")
-        attachments = payload.get("assistantOverrides", {}).get("context", {}).get("attachments", [])
-    except Exception as e:
-        logger.error("❌ Payload parse failed: %s", e)
+    email = custom.get("email")
+    email_confirmed = custom.get("Email Confirmed") or custom.get("email_confirmed")
+    interest = custom.get("interest")
 
-    if email:
-        send_email_with_attachments(
-            to_email=email,
-            subject="VAPI Project Files",
-            body="Please find the attached files.",
-            attachments=attachments
-        )
+    logger.info(
+        "📧 PARSED | email=%s | confirmed=%s | interest=%s",
+        email,
+        email_confirmed,
+        interest,
+    )
+
+    if email and email_confirmed:
+        try:
+            send_email_with_attachments(
+                to_email=email,
+                subject="Project Opportunity – BAINS Development",
+                body=(
+                    "Thank you for confirming your email.\n\n"
+                    "We’ll follow up shortly with project details.\n\n"
+                    "— BAINS Development"
+                ),
+                attachments=[],
+            )
+        except Exception as e:
+            logger.exception("🚨 EMAIL SEND FAILED: %s", e)
 
     return {"ok": True}
 
