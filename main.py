@@ -4,7 +4,7 @@ import os
 import logging
 import smtplib
 from email.message import EmailMessage
-import requests
+import urllib.request
 
 load_dotenv()
 
