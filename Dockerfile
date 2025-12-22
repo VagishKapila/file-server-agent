@@ -2,7 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# 👇 THIS IS THE FIX
+# 🔥 REQUIRED — fixes "No module named backend"
 ENV PYTHONPATH=/app
 
 COPY requirements.txt ./requirements.txt
