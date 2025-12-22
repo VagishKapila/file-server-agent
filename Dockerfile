@@ -7,8 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-# 🔥 FORCE DOCKER CACHE BUST
-RUN echo "railway-cache-bust-2025-12-22-1"
+# HARD cache bust (forces new layer)
+ARG CACHE_BUST=railway_2025_12_22_1230
+RUN echo "CACHE_BUST=$CACHE_BUST"
 
 EXPOSE 8080
 
