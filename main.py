@@ -1,51 +1,47 @@
-from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from dotenv import load_dotenv
 import os
-from email.message import EmailMessage
-import smtplib
+import logging
 
-app = FastAPI(title="Railway Webhook + Email Relay")
+load_dotenv()
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("railway-webhook")
+
+app = FastAPI(title="Railway Webhook Relay")
+
+# -------------------------
+# HEALTH / SANITY
+# -------------------------
+@app.get("/")
+def root():
+    return {"status": "railway server running"}
 
 @app.get("/__fingerprint")
 def fingerprint():
-    return {"status": "railway relay running"}
+    return {
+        "service": "railway-webhook",
+        "purpose": "receive webhooks + send email",
+        "database": bool(os.getenv("DATABASE_URL")),
+    }
 
+# -------------------------
+# TEST ENDPOINT
+# -------------------------
+@app.get("/test-attachment")
+def test_attachment():
+    return {"ok": True, "message": "Attachment endpoint reachable"}
+
+# -------------------------
+# VAPI / WAPI WEBHOOK
+# -------------------------
 @app.post("/negotiator/webhook")
 async def negotiator_webhook(request: Request):
-    data = await request.json()
-    print("WEBHOOK RECEIVED:", data)
+    payload = await request.json()
+
+    logger.info("📥 WEBHOOK RECEIVED")
+    logger.info(payload)
+
+    # 🔴 FOR NOW: just acknowledge
+    # Later: insert into DB + trigger email
     return {"ok": True}
-
-@app.post("/send-email")
-async def send_email(
-    to_email: str,
-    file: UploadFile = File(...)
-):
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
-
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-
-    msg = EmailMessage()
-    msg["From"] = os.getenv("FROM_EMAIL")
-    msg["To"] = to_email
-    msg["Subject"] = "Test Attachment"
-    msg.set_content("Attachment test")
-
-    with open(file_path, "rb") as f:
-        msg.add_attachment(
-            f.read(),
-            maintype="application",
-            subtype="octet-stream",
-            filename=file.filename,
-        )
-
-    with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT"))) as server:
-        server.starttls()
-        server.login(os.getenv("SMTP_USER"), os.getenv("SMTP_PASSWORD"))
-        server.send_message(msg)
-
-    return {"sent": True, "file": file.filename}
