@@ -2,13 +2,15 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# 🔥 REQUIRED — fixes "No module named backend"
 ENV PYTHONPATH=/app
 
-COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements FIRST
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-COPY . .
+# Copy backend explicitly (critical)
+COPY backend /app/backend
+COPY main.py /app/main.py
 
 EXPOSE 8080
 
