@@ -116,17 +116,23 @@ def smtp_test():
 @app.post("/negotiator/webhook")
 async def negotiator_webhook(request: Request):
     payload = await request.json()
-
     logger.info("📥 WEBHOOK RECEIVED")
     logger.info(payload)
 
-    email = payload.get("email")
-    attachments = payload.get("attachments", [])
+    # ---- VAPI extraction (SAFE + MINIMAL) ----
+    email = None
+    attachments = []
+
+    try:
+        email = payload["call"]["artifact"]["structuredOutputs"][0]["output"].get("email")
+        attachments = payload.get("assistantOverrides", {}).get("context", {}).get("attachments", [])
+    except Exception as e:
+        logger.error("❌ Payload parse failed: %s", e)
 
     if email:
         send_email_with_attachments(
             to_email=email,
-            subject="Project Files",
+            subject="VAPI Project Files",
             body="Please find the attached files.",
             attachments=attachments
         )
