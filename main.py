@@ -27,20 +27,20 @@ def send_email_with_attachments(to_email, subject, body, attachments=None):
 
     for a in attachments:
         try:
-            resp = requests.get(a["url"], timeout=10)
-            resp.raise_for_status()
+            with urllib.request.urlopen(a["url"], timeout=10) as resp:
+                file_bytes = resp.read()
 
             msg.add_attachment(
-                resp.content,
+                file_bytes,
                 maintype="application",
                 subtype="octet-stream",
                 filename=a.get("filename", "attachment")
             )
 
-            logger.info("📎 Attached file: %s", a.get("url"))
+            logger.info("📎 Attached: %s", a["url"])
 
         except Exception as e:
-            logger.error("❌ Attachment failed: %s | %s", a.get("url"), e)
+            logger.error("❌ Attachment failed: %s | %s", a["url"], e)
 
     with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT"))) as server:
         server.starttls()
