@@ -7,8 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
+# 🔥 FORCE DOCKER CACHE BUST
+RUN echo "railway-cache-bust-2025-12-22-1"
+
 EXPOSE 8080
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
-
-RUN echo "railway-cache-bust-2025-12-22-1"
