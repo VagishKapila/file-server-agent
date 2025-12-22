@@ -5,6 +5,7 @@ import logging
 import smtplib
 from email.message import EmailMessage
 import urllib.request
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -12,6 +13,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("railway-webhook")
 
 app = FastAPI(title="Railway Webhook Relay")
+
+class BrowserEmailRequest(BaseModel):
+    to_email: str
+    attachments: list = []
 
 # =====================================================
 # EMAIL SENDER (WITH URL ATTACHMENTS)
@@ -136,5 +141,22 @@ async def negotiator_webhook(request: Request):
             body="Please find the attached files.",
             attachments=attachments
         )
+
+    return {"ok": True}
+
+# =====================================================
+# BROWSER FORM → EMAIL + ATTACHMENTS
+# =====================================================
+@app.post("/browser/send-email")
+def browser_send_email(payload: BrowserEmailRequest):
+    logger.info("🌐 BROWSER EMAIL REQUEST")
+    logger.info(payload.dict())
+
+    send_email_with_attachments(
+        to_email=payload.to_email,
+        subject="Project Drawings & Photos",
+        body="Please find drawings and photos attached.",
+        attachments=payload.attachments,
+    )
 
     return {"ok": True}
