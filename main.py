@@ -1,4 +1,3 @@
-cat > main.py <<'EOF'
 from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 import os
@@ -225,4 +224,3 @@ def browser_send_email(payload: BrowserEmailRequest):
         attachments=payload.attachments,
     )
     return result
-EOF
