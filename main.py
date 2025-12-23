@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from pathlib import
+from pathlib import Path
 from backend.app.routes.autodial import router as autodial_router
 
 BASE_UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "bains_uploads"))
