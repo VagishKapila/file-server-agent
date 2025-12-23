@@ -21,13 +21,6 @@ async def autodial_start(
     RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
     RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
 
-    logger.error(
-        "RETELL CHECK key=%s agent=%s phone=%s raw_phone=%r",
-        bool(RETELL_API_KEY),
-        bool(RETELL_AGENT_ID),
-        bool(RETELL_PHONE_NUMBER),
-        RETELL_PHONE_NUMBER,
-    )
 
     if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Missing Retell environment variables")
