@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import os
-from pathlib import Path
+from pathlib import
+from backend.app.routes.autodial import router as autodial_router
 
 BASE_UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "bains_uploads"))
 BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -20,6 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("railway-webhook")
 
 app = FastAPI(title="Railway Webhook Relay")
+app.include_router(autodial_router)
 
 app.add_middleware(
     CORSMiddleware,
