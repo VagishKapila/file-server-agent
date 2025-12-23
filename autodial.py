@@ -6,7 +6,49 @@ logger = logging.getLogger("autodial")
 
 RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
 
+@router.get("/_retell_check")
+async def retell_check():
+    RETELL_API_KEY = os.getenv("RETELL_API_KEY")
+    RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
+    RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
 
+    status = {
+        "RETELL_API_KEY": bool(RETELL_API_KEY),
+        "RETELL_AGENT_ID": bool(RETELL_AGENT_ID),
+        "RETELL_PHONE_NUMBER": bool(RETELL_PHONE_NUMBER),
+        "raw_phone": RETELL_PHONE_NUMBER,
+    }
+
+    # Hard fail early
+    if not all([RETELL_API_KEY, RETELL_AGENT_ID, RETELL_PHONE_NUMBER]):
+        return {
+            "ok": False,
+            "stage": "env",
+            "status": status,
+        }
+
+    # 🔍 Ping Retell agent
+    try:
+        r = requests.get(
+            f"https://api.retellai.com/v1/agents/{RETELL_AGENT_ID}",
+            headers={"Authorization": f"Bearer {RETELL_API_KEY}"},
+            timeout=15,
+        )
+        status["agent_http_status"] = r.status_code
+        status["agent_response"] = r.json() if r.status_code == 200 else r.text
+    except Exception as e:
+        return {
+            "ok": False,
+            "stage": "agent_fetch",
+            "error": str(e),
+            "status": status,
+        }
+
+    return {
+        "ok": True,
+        "status": status,
+    }
+    
 @router.post("/start")
 async def autodial_start(
     project_request_id: str = Form(...),
