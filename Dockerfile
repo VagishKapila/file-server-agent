@@ -7,8 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py autodial.py .
 
-# HARD cache bust (forces new layer)
-ARG CACHE_BUST=railway_2025_12_22_1230
+ARG CACHE_BUST=railway_2025_12_23_FINAL
 RUN echo "CACHE_BUST=$CACHE_BUST"
 
 EXPOSE 8080
