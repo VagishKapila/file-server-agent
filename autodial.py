@@ -86,14 +86,14 @@ async def autodial_start(
     results = []
 
     for v in vendor_list:
-        phone = v.get("phone")
+        phone = callback_phone
         if not phone:
             continue
 
         payload = {
             "override_agent_id": RETELL_AGENT_ID,
             "from_number": RETELL_PHONE_NUMBER,
-            "to_number": phone,
+            "to_number": callback_phone,
             "metadata": {
                 "project_request_id": project_request_id,
                 "project_address": project_address,
