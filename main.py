@@ -52,10 +52,3 @@ def env_check():
         "RETELL_PHONE_NUMBER": bool(os.getenv("RETELL_PHONE_NUMBER")),
     }
 
-@app.get("/__dump_env")
-def dump_env():
-    return {
-        k: os.getenv(k)
-        for k in sorted(os.environ.keys())
-        if "RETELL" in k
-    }
