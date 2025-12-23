@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY main.py autodial.py .
 
 # HARD cache bust (forces new layer)
 ARG CACHE_BUST=railway_2025_12_22_1230
