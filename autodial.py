@@ -4,16 +4,6 @@ import json, os, requests, logging
 router = APIRouter(prefix="/autodial", tags=["autodial"])
 logger = logging.getLogger("autodial")
 
-RETELL_API_KEY = os.getenv("RETELL_API_KEY")
-RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
-RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
-logger.error(
-    "RETELL CHECK key=%s agent=%s phone=%s",
-    bool(RETELL_API_KEY),
-    bool(RETELL_AGENT_ID),
-    bool(RETELL_PHONE_NUMBER),
-)
-
 RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
 
 
@@ -24,12 +14,25 @@ async def autodial_start(
     trade: str = Form(...),
     vendors: str = Form(...),
     callback_phone: str = Form(...),
-    attachments: str = Form("[]"),  # JSON list of attachment IDs
+    attachments: str = Form("[]"),
 ):
+    # ✅ READ ENV AT RUNTIME (NOT IMPORT TIME)
+    RETELL_API_KEY = os.getenv("RETELL_API_KEY")
+    RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
+    RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
+
+    logger.error(
+        "RETELL CHECK key=%s agent=%s phone=%s raw_phone=%r",
+        bool(RETELL_API_KEY),
+        bool(RETELL_AGENT_ID),
+        bool(RETELL_PHONE_NUMBER),
+        RETELL_PHONE_NUMBER,
+    )
+
     if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Missing Retell environment variables")
 
-    # Parse attachment IDs safely
+    # Parse attachment IDs
     try:
         attachment_ids = json.loads(attachments)
         if not isinstance(attachment_ids, list):
@@ -37,7 +40,7 @@ async def autodial_start(
     except Exception:
         attachment_ids = []
 
-    # Parse vendors list
+    # Parse vendors
     try:
         vendor_list = json.loads(vendors)
         if not isinstance(vendor_list, list):
@@ -62,7 +65,7 @@ async def autodial_start(
                 "trade": trade,
                 "vendor": v.get("name"),
                 "callback_phone": callback_phone,
-                "attachment_ids": attachment_ids,  # 🔑 passed to AI
+                "attachment_ids": attachment_ids,
             },
         }
 
