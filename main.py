@@ -52,3 +52,18 @@ def env_check():
         "RETELL_PHONE_NUMBER": bool(os.getenv("RETELL_PHONE_NUMBER")),
     }
 
+@app.post("/retell/webhook")
+async def retell_webhook_proxy(request: Request):
+    payload = await request.json()
+
+    # forward to backend app
+    r = requests.post(
+        os.getenv("BACKEND_BASE_URL") + "/retell/webhook",
+        json=payload,
+        timeout=10
+    )
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=500, detail="Backend webhook failed")
+
+    return {"ok": True}
