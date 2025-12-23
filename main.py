@@ -8,6 +8,11 @@ import urllib.request
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from pathlib import Path
+
+BASE_UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "bains_uploads"))
+BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv()
 
