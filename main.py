@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-from autodial import router as autodial_router  # ✅ FIXED IMPORT
+from autodial import router as autodial_router
 
 load_dotenv()
 
