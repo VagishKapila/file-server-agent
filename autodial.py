@@ -21,7 +21,7 @@ def resolve_to_number(vendor_phone: str, callback_phone: str) -> str:
         → Real vendor phone is preserved in metadata
     """
     test_mode = os.getenv("AUTODIAL_TEST_MODE", "").lower() in ("1", "true", "yes")
-    test_numbers_raw = os.getenv("AUTODIAL_TEST_NUMBERS", "")
+    test_numbers_raw = os.getenv("AUTODIAL_TEST_TO_NUMBER", "")
 
     if not test_mode:
         return vendor_phone
