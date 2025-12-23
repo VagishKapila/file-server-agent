@@ -43,3 +43,11 @@ def root():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.get("/__env_check")
+def env_check():
+    return {
+        "RETELL_API_KEY": bool(os.getenv("RETELL_API_KEY")),
+        "RETELL_AGENT_ID": bool(os.getenv("RETELL_AGENT_ID")),
+        "RETELL_PHONE_NUMBER": bool(os.getenv("RETELL_PHONE_NUMBER")),
+    }
