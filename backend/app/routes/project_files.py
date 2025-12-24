@@ -1,0 +1,58 @@
+import os, uuid, hashlib
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from pathlib import Path
+
+from backend.app.db import get_db
+from backend.app.models.project_files import ProjectFile
+
+router = APIRouter(prefix="/project-files", tags=["project-files"])
+
+UPLOAD_DIR = os.getenv("UPLOAD_DIR")
+if not UPLOAD_DIR:
+    raise RuntimeError("UPLOAD_DIR must be set")
+
+UPLOAD_PATH = Path(UPLOAD_DIR)
+if not UPLOAD_PATH.exists():
+    raise RuntimeError(f"UPLOAD_DIR does not exist: {UPLOAD_PATH}")
+
+
+@router.post("/upload")
+async def upload_project_files(
+    project_request_id: int = Form(...),
+    files: list[UploadFile] = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    saved = []
+
+    for file in files:
+        data = await file.read()
+        checksum = hashlib.md5(data).hexdigest()
+
+        ext = Path(file.filename).suffix
+        stored_filename = f"{uuid.uuid4().hex}{ext}"
+        stored_path = UPLOAD_PATH / stored_filename
+
+        with open(stored_path, "wb") as f:
+            f.write(data)
+
+        record = ProjectFile(
+            project_request_id=project_request_id,
+            filename=file.filename,
+            stored_filename=stored_filename,
+            stored_path=str(stored_path),
+            file_type=file.content_type,
+            file_size=len(data),
+            checksum=checksum,
+        )
+
+        db.add(record)
+        await db.commit()
+        await db.refresh(record)
+
+        saved.append({
+            "id": record.id,
+            "filename": record.filename,
+        })
+
+    return {"status": "ok", "files": saved}
