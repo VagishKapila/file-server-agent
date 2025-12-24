@@ -4,7 +4,7 @@ from dotenv import load_dotenv, find_dotenv
 import asyncio
 import os
 
-from backend.app.db import connect_to_db, close_db_connection
+from app.db import connect_to_db, close_db_connection
 
 from backend.app.routes.auth import router as auth_router
 from backend.app.routes.auth_google import router as auth_google_router
