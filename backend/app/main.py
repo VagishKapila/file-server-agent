@@ -6,8 +6,10 @@ import asyncio
 import os
 from pathlib import Path
 
+# ---------------- DB ----------------
 from app.db import connect_to_db, close_db_connection
 
+# ---------------- ROUTES (APP) ----------------
 from app.routes.auth import router as auth_router
 from app.routes.auth_google import router as auth_google_router
 from app.routes.browser_email import router as browser_email_router
@@ -29,6 +31,8 @@ from app.routes import (
 from app.routes.sub_calls import router as sub_calls_router
 from app.routes.search_routes import router as search_router
 from app.routes.project_search import router as project_search_router
+
+# ✅ correct path (modules is sibling of app/)
 from modules.vendors.routes.vendor_routes import router as vendor_router
 
 from app.routes.negotiator_webhook import router as negotiator_router
@@ -49,7 +53,7 @@ load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR")
 if not UPLOAD_DIR:
-    raise RuntimeError("UPLOAD_DIR is not set")
+    raise RuntimeError("❌ UPLOAD_DIR is not set")
 
 BASE_UPLOAD_DIR = Path(UPLOAD_DIR)
 BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
