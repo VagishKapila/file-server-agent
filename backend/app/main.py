@@ -52,6 +52,7 @@ if not UPLOAD_DIR:
     raise RuntimeError("UPLOAD_DIR is not set")
 
 BASE_UPLOAD_DIR = Path(UPLOAD_DIR)
+BASE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------- APP ----------------
 app = FastAPI(title="Jessica Sub AI Backend")
