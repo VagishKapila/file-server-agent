@@ -29,7 +29,7 @@ from app.routes import (
 from app.routes.sub_calls import router as sub_calls_router
 from app.routes.search_routes import router as search_router
 from app.routes.project_search import router as project_search_router
-from backend.modules.vendors.routes.vendor_routes import router as vendor_router
+from modules.vendors.routes.vendor_routes import router as vendor_router
 
 from app.routes.negotiator_webhook import router as negotiator_router
 from app.routes.browser_test import router as browser_test_router
