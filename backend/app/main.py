@@ -1,20 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv, find_dotenv
+from fastapi.responses import FileResponse
+from dotenv import load_dotenv
 import asyncio
 import os
-
-from app.db import connect_to_db
-
-from app.routes.auth import router as auth_router
-from backend.app.routes.auth_google import router as auth_google_router
-from backend.app.routes.browser_email import router as browser_email_router
-from backend.app.routes.retell_webhook import router as retell_webhook_router
-from fastapi.responses import FileResponse
-from fastapi import HTTPException
 from pathlib import Path
 
-from backend.app.routes import (
+from app.db import connect_to_db, close_db_connection
+
+from app.routes.auth import router as auth_router
+from app.routes.auth_google import router as auth_google_router
+from app.routes.browser_email import router as browser_email_router
+from app.routes.retell_webhook import router as retell_webhook_router
+
+from app.routes import (
     subs_routes,
     projects,
     vendors,
@@ -27,29 +26,28 @@ from backend.app.routes import (
     material_calls,
 )
 
-from backend.app.routes.sub_calls import router as sub_calls_router
-from backend.app.routes.search_routes import router as search_router
-from backend.app.routes.project_search import router as project_search_router
-from backend.modules.vendors.routes.vendor_routes import router as vendor_router
+from app.routes.sub_calls import router as sub_calls_router
+from app.routes.search_routes import router as search_router
+from app.routes.project_search import router as project_search_router
+from app.modules.vendors.routes.vendor_routes import router as vendor_router
 
-from backend.app.routes.negotiator_webhook import router as negotiator_router
-from backend.app.routes.browser_test import router as browser_test_router
-from backend.app.routes.project_files import router as project_files_router
-from backend.app.routes.subcontractor_email import router as subcontractor_email_router
-from backend.app.routes.client_email import router as client_email_router
-from backend.app.routes.client_report import router as client_report_router
-from backend.app.routes.project_report import router as project_report_router
-from backend.app.routes.user_profile import router as user_profile_router
-from backend.app.routes.admin_beta import router as admin_beta_router
+from app.routes.negotiator_webhook import router as negotiator_router
+from app.routes.browser_test import router as browser_test_router
+from app.routes.project_files import router as project_files_router
+from app.routes.subcontractor_email import router as subcontractor_email_router
+from app.routes.client_email import router as client_email_router
+from app.routes.client_report import router as client_report_router
+from app.routes.project_report import router as project_report_router
+from app.routes.user_profile import router as user_profile_router
+from app.routes.admin_beta import router as admin_beta_router
+
+from app.services.retry_scheduler import retry_loop
 
 
-
-from backend.app.services.retry_scheduler import retry_loop
-
-from pathlib import Path
-
+# ---------------- ENV ----------------
 ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH, override=True)
+
 UPLOAD_DIR = os.getenv("UPLOAD_DIR")
 if not UPLOAD_DIR:
     raise RuntimeError("UPLOAD_DIR is not set")
@@ -57,6 +55,7 @@ if not UPLOAD_DIR:
 BASE_UPLOAD_DIR = Path(UPLOAD_DIR)
 
 
+# ---------------- APP ----------------
 app = FastAPI(title="Jessica Sub AI Backend")
 
 app.add_middleware(
@@ -67,6 +66,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- ROUTES ----------------
 app.include_router(auth_router)
 app.include_router(auth_google_router)
 
@@ -100,11 +100,14 @@ app.include_router(client_report_router)
 app.include_router(project_report_router)
 app.include_router(user_profile_router)
 app.include_router(admin_beta_router)
+
 app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
 
-print("🔥 RUNNING backend.app.main 🔥")
+print("🔥 RUNNING app.main 🔥")
 
+
+# ---------------- HEALTH ----------------
 @app.get("/")
 def root():
     return {"status": "Backend running", "version": "0.3"}
@@ -113,9 +116,10 @@ def root():
 def health():
     return {"ok": True}
 
+
+# ---------------- DEBUG ----------------
 @app.get("/debug/env")
 def debug_env():
-    import os
     return {
         "VAPI_API_KEY_loaded": bool(os.getenv("VAPI_API_KEY")),
         "VAPI_PRIVATE_KEY_loaded": bool(os.getenv("VAPI_PRIVATE_KEY")),
@@ -123,18 +127,8 @@ def debug_env():
         "VAPI_PHONE_NUMBER_ID": os.getenv("VAPI_PHONE_NUMBER_ID"),
     }
 
-@app.on_event("startup")
-async def startup():
-    await connect_to_db()
-    asyncio.create_task(retry_loop())
-
-@app.on_event("shutdown")
-async def shutdown():
-    await close_db_connection()
-
 @app.get("/debug/vapi-env")
 def debug_vapi_env():
-    import os
     return {
         "VAPI_PHONE_NUMBER_ID": os.getenv("VAPI_PHONE_NUMBER_ID"),
         "VAPI_ASSISTANT_ID": os.getenv("VAPI_ASSISTANT_ID"),
@@ -147,14 +141,15 @@ def show_routes():
 @app.get("/__fingerprint")
 def fingerprint():
     return {
-        "file": "backend.app.main",
-        "status": "correct app loaded"
+        "file": "app.main",
+        "status": "correct app loaded",
     }
 
+
+# ---------------- FILES ----------------
 @app.get("/files/{filename}")
 def serve_file(filename: str):
     file_path = BASE_UPLOAD_DIR / filename
-
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
@@ -163,3 +158,14 @@ def serve_file(filename: str):
         filename=filename,
         media_type="application/octet-stream",
     )
+
+
+# ---------------- LIFECYCLE ----------------
+@app.on_event("startup")
+async def startup():
+    await connect_to_db()
+    asyncio.create_task(retry_loop())
+
+@app.on_event("shutdown")
+async def shutdown():
+    await close_db_connection()
