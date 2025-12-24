@@ -12,9 +12,8 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR")
 if not UPLOAD_DIR:
     raise RuntimeError("UPLOAD_DIR must be set")
 
-UPLOAD_PATH = Path(UPLOAD_DIR)
-if not UPLOAD_PATH.exists():
-    raise RuntimeError(f"UPLOAD_DIR does not exist: {UPLOAD_PATH}")
+UPLOAD_PATH = Path(os.getenv("UPLOAD_DIR", "uploads"))
+UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/upload")
