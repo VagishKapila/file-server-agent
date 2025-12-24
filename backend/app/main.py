@@ -4,9 +4,9 @@ from dotenv import load_dotenv, find_dotenv
 import asyncio
 import os
 
-from app.db import connect_to_db, close_db_connection
+from app.db import connect_to_db
 
-from backend.app.routes.auth import router as auth_router
+from app.routes.auth import router as auth_router
 from backend.app.routes.auth_google import router as auth_google_router
 from backend.app.routes.browser_email import router as browser_email_router
 from backend.app.routes.retell_webhook import router as retell_webhook_router
