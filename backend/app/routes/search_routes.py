@@ -140,7 +140,7 @@ async def perform_search(
     # 7) Optional client email (reuse existing route)
     # =========================
     if data.email:
-        from backend.app.routes.client_email import (
+        from app.routes.client_email import (
             send_client_summary_email,
             ClientEmailRequest,
         )

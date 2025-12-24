@@ -3,9 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import logging
 
-from backend.app.db import get_db
-from backend.app.models.project_files import ProjectFile
-from backend.app.services.email_service import send_email_with_attachments
+from app.db import get_db
+from app.models.project_files import ProjectFile
+from app.services.email_service import send_email_with_attachments
 
 router = APIRouter(prefix="/email/sub", tags=["email"])
 logger = logging.getLogger("vendor-email")

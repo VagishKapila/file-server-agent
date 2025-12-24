@@ -1,8 +1,8 @@
-from backend.app.db import get_db
+from app.db import get_db
 
-from backend.app.models.project import ProjectRequest
+from app.models.project import ProjectRequest
 
-from backend.app.models.subs import (
+from app.models.subs import (
     Subcontractor,
     SubOutreach,
     SubCallResult,

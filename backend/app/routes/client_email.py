@@ -5,10 +5,10 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.app.db import get_db
-from backend.app.utils.email_sender import send_email
-from backend.app.models.activity_log import ActivityLog
-from backend.app.models.email_log import EmailLog
+from app.db import get_db
+from app.utils.email_sender import send_email
+from app.models.activity_log import ActivityLog
+from app.models.email_log import EmailLog
 import logging
 
 logger = logging.getLogger("client_email")

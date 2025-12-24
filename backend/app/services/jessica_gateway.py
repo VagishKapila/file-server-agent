@@ -1,4 +1,4 @@
-from backend.app.services.vapi_client import start_call
+from app.services.vapi_client import start_call
 from typing import List, Union, Optional
 
 

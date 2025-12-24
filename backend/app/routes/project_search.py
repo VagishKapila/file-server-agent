@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.app.db import get_db
-from backend.app.models.search_result import SearchResult
+from app.db import get_db
+from app.models.search_result import SearchResult
 
 router = APIRouter(prefix="/projects", tags=["Project Search"])
 

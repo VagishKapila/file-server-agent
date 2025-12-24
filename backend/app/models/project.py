@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from datetime import datetime
 
-from backend.app.db import Base
+from app.db import Base
 
 
 # -----------------------------

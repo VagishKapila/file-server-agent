@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, Body
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db import get_db
-from backend.app.models.project import ProjectRequest
+from app.db import get_db
+from app.models.project import ProjectRequest
 
 router = APIRouter(prefix="/project-requests", tags=["Project Requests"])
 

@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
 from ..models.activity_log import ActivityLog
-from backend.app.services.resolve_dial import resolve_dial_number
-from backend.app.services.jessica_gateway import start_jessica_call
+from app.services.resolve_dial import resolve_dial_number
+from app.services.jessica_gateway import start_jessica_call
 
 router = APIRouter(prefix="/autodial", tags=["autodial"])
 

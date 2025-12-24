@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import os
 
-from backend.app.models.project_files import ProjectFile
+from app.models.project_files import ProjectFile
 
 # -----------------------------------
 # CONFIG

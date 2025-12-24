@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 import uuid
 
-from backend.app.db_backend.db import Base
+from app.db_backend.db import Base
 
 def uid():
     return uuid.uuid4()

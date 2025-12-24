@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from backend.app.db import get_db
-from backend.app.models.user_profile import UserProfile
+from app.db import get_db
+from app.models.user_profile import UserProfile
 
 router = APIRouter(prefix="/users/profile", tags=["user-profile"])
 

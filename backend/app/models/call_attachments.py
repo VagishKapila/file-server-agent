@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, func
 from sqlalchemy.dialects.postgresql import JSONB
 
-from backend.app.db import Base
+from app.db import Base
 
 
 class CallAttachments(Base):

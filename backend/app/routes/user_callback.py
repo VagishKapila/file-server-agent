@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db import get_db
-from backend.app.models.user import User
+from app.db import get_db
+from app.models.user import User
 
 router = APIRouter(prefix="/user", tags=["user"])
 

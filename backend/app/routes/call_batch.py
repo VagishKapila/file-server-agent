@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from backend.app.db import get_db
-from backend.app.models.vendor_call import VendorCall
+from app.db import get_db
+from app.models.vendor_call import VendorCall
 
 router = APIRouter(prefix="/call-batch", tags=["Call Batch"])
 

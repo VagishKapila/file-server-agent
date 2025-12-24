@@ -3,8 +3,8 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 
-from backend.app.db import get_db
-from backend.app.models.project_files import ProjectFile
+from app.db import get_db
+from app.models.project_files import ProjectFile
 
 router = APIRouter(prefix="/project-files", tags=["project-files"])
 

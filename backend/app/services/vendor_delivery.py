@@ -1,8 +1,8 @@
 from typing import Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.services.file_delivery import prepare_files_for_vendor
-from backend.app.services.email_sender import send_email
+from app.services.file_delivery import prepare_files_for_vendor
+from app.services.email_sender import send_email
 
 
 async def send_vendor_documents(

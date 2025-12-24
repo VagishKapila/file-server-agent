@@ -5,17 +5,17 @@ from sqlalchemy import select
 from io import BytesIO
 from datetime import datetime
 
-from backend.app.db import get_db
-from backend.app.models.project import ProjectRequest
+from app.db import get_db
+from app.models.project import ProjectRequest
 
 # ---- Optional imports (never assumed) ----
 try:
-    from backend.app.models.subs import Subcontractor, SubOutreach
+    from app.models.subs import Subcontractor, SubOutreach
 except Exception:
     Subcontractor = SubOutreach = None
 
 try:
-    from backend.app.models.materials import (
+    from app.models.materials import (
         MaterialVendor,
         MaterialOutreach,
         MaterialQuote,

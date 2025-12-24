@@ -5,11 +5,11 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-from backend.app.db import get_db
-from backend.app.models.activity_log import ActivityLog
-from backend.app.models.vendor_call_state import VendorCallState
-from backend.app.models.project_files import ProjectFile
-from backend.app.models.email_log import EmailLog
+from app.db import get_db
+from app.models.activity_log import ActivityLog
+from app.models.vendor_call_state import VendorCallState
+from app.models.project_files import ProjectFile
+from app.models.email_log import EmailLog
 
 router = APIRouter(prefix="/client-report", tags=["client-report"])
 

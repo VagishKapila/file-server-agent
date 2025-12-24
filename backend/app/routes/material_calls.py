@@ -4,8 +4,8 @@ from sqlalchemy import select
 from pydantic import BaseModel
 from datetime import datetime
 
-from backend.app.db import get_db
-from backend.app.models.materials import (
+from app.db import get_db
+from app.models.materials import (
     MaterialVendor,
     MaterialOutreach,
     MaterialQuote,

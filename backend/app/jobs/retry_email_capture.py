@@ -6,9 +6,9 @@ import requests
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db import AsyncSessionLocal
-from backend.app.models.activity_log import ActivityLog
-from backend.app.models.vendor_call_state import VendorCallState
+from app.db import AsyncSessionLocal
+from app.models.activity_log import ActivityLog
+from app.models.vendor_call_state import VendorCallState
 
 VAPI_CALL_ENDPOINT = "https://api.vapi.ai/call"
 

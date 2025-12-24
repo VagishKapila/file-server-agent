@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from backend.app.db import get_db
-from backend.app.models.beta_subscriber import BetaSubscriber
+from app.db import get_db
+from app.models.beta_subscriber import BetaSubscriber
 
 router = APIRouter(prefix="/admin/beta", tags=["beta"])
 

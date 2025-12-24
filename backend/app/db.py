@@ -52,8 +52,8 @@ async def get_db():
 async def connect_to_db():
     try:
         # 🔥 IMPORT ORDER MATTERS
-        from backend.app.models import project
-        from backend.app.models import activity_log
+        from app.models import project
+        from app.models import activity_log
         from backend.modules.vendors.models import vendor
 
         async with engine.begin() as conn:

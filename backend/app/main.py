@@ -4,17 +4,17 @@ from dotenv import load_dotenv, find_dotenv
 import asyncio
 import os
 
-from backend.app.db import connect_to_db, close_db_connection
+from app.db import connect_to_db, close_db_connection
 
-from backend.app.routes.auth import router as auth_router
-from backend.app.routes.auth_google import router as auth_google_router
-from backend.app.routes.browser_email import router as browser_email_router
-from backend.app.routes.retell_webhook import router as retell_webhook_router
+from app.routes.auth import router as auth_router
+from app.routes.auth_google import router as auth_google_router
+from app.routes.browser_email import router as browser_email_router
+from app.routes.retell_webhook import router as retell_webhook_router
 from fastapi.responses import FileResponse
 from fastapi import HTTPException
 from pathlib import Path
 
-from backend.app.routes import (
+from app.routes import (
     subs_routes,
     projects,
     vendors,
@@ -27,24 +27,24 @@ from backend.app.routes import (
     material_calls,
 )
 
-from backend.app.routes.sub_calls import router as sub_calls_router
-from backend.app.routes.search_routes import router as search_router
-from backend.app.routes.project_search import router as project_search_router
+from app.routes.sub_calls import router as sub_calls_router
+from app.routes.search_routes import router as search_router
+from app.routes.project_search import router as project_search_router
 from backend.modules.vendors.routes.vendor_routes import router as vendor_router
 
-from backend.app.routes.negotiator_webhook import router as negotiator_router
-from backend.app.routes.browser_test import router as browser_test_router
-from backend.app.routes.project_files import router as project_files_router
-from backend.app.routes.subcontractor_email import router as subcontractor_email_router
-from backend.app.routes.client_email import router as client_email_router
-from backend.app.routes.client_report import router as client_report_router
-from backend.app.routes.project_report import router as project_report_router
-from backend.app.routes.user_profile import router as user_profile_router
-from backend.app.routes.admin_beta import router as admin_beta_router
+from app.routes.negotiator_webhook import router as negotiator_router
+from app.routes.browser_test import router as browser_test_router
+from app.routes.project_files import router as project_files_router
+from app.routes.subcontractor_email import router as subcontractor_email_router
+from app.routes.client_email import router as client_email_router
+from app.routes.client_report import router as client_report_router
+from app.routes.project_report import router as project_report_router
+from app.routes.user_profile import router as user_profile_router
+from app.routes.admin_beta import router as admin_beta_router
 
 
 
-from backend.app.services.retry_scheduler import retry_loop
+from app.services.retry_scheduler import retry_loop
 
 from pathlib import Path
 
@@ -103,7 +103,7 @@ app.include_router(admin_beta_router)
 app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
 
-print("🔥 RUNNING backend.app.main 🔥")
+print("🔥 RUNNING app.main 🔥")
 
 @app.get("/")
 def root():
@@ -147,7 +147,7 @@ def show_routes():
 @app.get("/__fingerprint")
 def fingerprint():
     return {
-        "file": "backend.app.main",
+        "file": "app.main",
         "status": "correct app loaded"
     }
 

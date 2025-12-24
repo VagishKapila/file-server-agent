@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, Text, TIMESTAMP, Boolean
 from sqlalchemy.sql import func
-from backend.app.db import Base
+from app.db import Base
 
 
 class ProjectFile(Base):

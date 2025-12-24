@@ -4,9 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import os
 
-from backend.app.db import get_db
-from backend.app.models.project_files import ProjectFile
-from backend.app.services.unified_email_service import send_project_email
+from app.db import get_db
+from app.models.project_files import ProjectFile
+from app.services.unified_email_service import send_project_email
 
 BASE_DIR = os.getenv("APP_BASE_DIR", os.getcwd())
 

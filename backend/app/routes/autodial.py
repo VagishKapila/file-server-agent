@@ -2,8 +2,8 @@ from fastapi import APIRouter, Form, HTTPException, Depends
 import json, os, requests, logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.db import get_db
-from backend.app.models.call_attachments import CallAttachments
+from app.db import get_db
+from app.models.call_attachments import CallAttachments
 
 router = APIRouter(prefix="/autodial", tags=["autodial"])
 logger = logging.getLogger("autodial")

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.app.db import get_db
+from app.db import get_db
 from backend.modules.vendors.models.vendor import Vendor
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])

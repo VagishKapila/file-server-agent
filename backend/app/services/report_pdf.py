@@ -50,9 +50,9 @@ from sqlalchemy.orm import Session
 import uuid
 import os
 
-from backend.app.db_backend.db import get_db
-from backend.app.routes.reports import project_report
-from backend.app.services.report_pdf import generate_project_report_pdf
+from app.db_backend.db import get_db
+from app.routes.reports import project_report
+from app.services.report_pdf import generate_project_report_pdf
 
 router = APIRouter(prefix="/report-export", tags=["Report Export"])
 

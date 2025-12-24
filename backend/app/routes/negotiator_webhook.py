@@ -4,9 +4,9 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from backend.app.db import get_db
-from backend.app.models.email_log import EmailLog
-from backend.app.models.call_attachments import CallAttachments
+from app.db import get_db
+from app.models.email_log import EmailLog
+from app.models.call_attachments import CallAttachments
 
 router = APIRouter(prefix="/negotiator", tags=["negotiator"])
 logger = logging.getLogger("negotiator")
@@ -85,7 +85,7 @@ async def negotiator_webhook(
     # --------------------------------------------------
     # SEND VIA SUBCONTRACTOR EMAIL PIPELINE
     # --------------------------------------------------
-    from backend.app.routes.subcontractor_email import send_vendor_email
+    from app.routes.subcontractor_email import send_vendor_email
 
     await send_vendor_email(
         payload={

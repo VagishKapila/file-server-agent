@@ -1,8 +1,8 @@
-from backend.app.db import get_db
+from app.db import get_db
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from backend.app.models.materials import (
+from app.models.materials import (
     MaterialVendor,
     MaterialOutreach,
     MaterialQuote,

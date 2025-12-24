@@ -1,5 +1,5 @@
 import logging
-from backend.app.services.email_service import send_email_with_attachments
+from app.services.email_service import send_email_with_attachments
 
 logger = logging.getLogger("unified-email")
 

@@ -4,8 +4,8 @@ from sqlalchemy import select, func
 from pydantic import BaseModel
 from datetime import datetime
 
-from backend.app.db import get_db
-from backend.app.models.subs import (
+from app.db import get_db
+from app.models.subs import (
     Subcontractor,
     SubOutreach,
     SubCallResult,
