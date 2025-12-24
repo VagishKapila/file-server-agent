@@ -1,6 +1,6 @@
 import httpx
 import logging
-from backend.config.vapi_config import (
+from config.vapi_config import (
     VAPI_BASE_URL,
     VAPI_ASSISTANT_ID,
     VAPI_PHONE_NUMBER_ID,

@@ -54,7 +54,7 @@ async def connect_to_db():
         # 🔥 IMPORT ORDER MATTERS
         from app.models import project
         from app.models import activity_log
-        from backend.modules.vendors.models import vendor
+        from modules.vendors.models import vendor
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
