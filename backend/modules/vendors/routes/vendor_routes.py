@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db import get_db
-from backend.modules.vendors.models.vendor import Vendor
+from modules.vendors.models.vendor import Vendor
 
 router = APIRouter(prefix="/vendors", tags=["vendors"])
 
