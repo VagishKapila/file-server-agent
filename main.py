@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+import requests
 
 from autodial import router as autodial_router
 
