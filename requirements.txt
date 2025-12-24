@@ -8,3 +8,4 @@ asyncpg
 greenlet>=3.0
 aiofiles>=23.2.1
 requests
+asyncpg>=0.29.0
