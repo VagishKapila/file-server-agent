@@ -2,6 +2,7 @@ import os
 import requests
 from typing import List, Dict
 
+
 TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 
@@ -9,7 +10,6 @@ GOOGLE_PLACES_API_KEY = (
     os.environ.get("GOOGLE_PLACES_API_KEY")
     or os.environ.get("GOOGLE_MAPS_API_KEY")
 )
-
 def geocode_address(address: str):
     params = {"address": address, "key": GOOGLE_PLACES_API_KEY}
     res = requests.get(GEOCODE_URL, params=params).json()

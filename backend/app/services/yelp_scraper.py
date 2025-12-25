@@ -3,7 +3,6 @@ import requests
 import phonenumbers
 
 YELP_API_KEY = os.getenv("YELP_API_KEY")
-
 def normalize_phone(raw_phone, default_country="US"):
     if not raw_phone:
         return None
