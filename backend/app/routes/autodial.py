@@ -1,9 +1,5 @@
-from fastapi import APIRouter, Form, HTTPException, Depends
+from fastapi import APIRouter, Form, HTTPException
 import json, os, requests, logging
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.db import get_db
-from app.models.call_attachments import CallAttachments
 
 router = APIRouter(prefix="/autodial", tags=["autodial"])
 logger = logging.getLogger("autodial")
@@ -17,72 +13,58 @@ RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
 
 @router.post("/start")
 async def autodial_start(
-    project_request_id: str = Form(...),
-    project_address: str = Form(...),
-    trade: str = Form(...),
     vendors: str = Form(...),
-    callback_phone: str = Form(...),
-    attachments: str = Form("[]"),
-    db: AsyncSession = Depends(get_db),
 ):
+    """
+    🔥 Railway isolation test
+    Calls Retell EXACTLY like your successful curl
+    """
+
     if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Missing Retell env")
 
-    vendor_list = json.loads(vendors)
-    logger.warning(f"📞 AUTODIAL VENDORS PARSED: {vendor_list}")
-
     try:
-        attachment_ids = json.loads(attachments)
+        vendor_list = json.loads(vendors)
     except Exception:
-        attachment_ids = []
+        raise HTTPException(status_code=400, detail="Invalid vendors JSON")
 
-    results = []
+    if not vendor_list:
+        raise HTTPException(status_code=400, detail="No vendors provided")
 
-    for v in vendor_list:
-        phone = v.get("phone") or v.get("phone_e164")
-        if not phone:
-            continue
+    # 🔒 FORCE FIRST VENDOR ONLY
+    phone = vendor_list[0].get("phone_e164")
 
-        payload = {
-            "override_agent_id": RETELL_AGENT_ID,
-            "from_number": RETELL_PHONE_NUMBER,
-            "to_number": phone,
-            "metadata": {
-                "project_request_id": project_request_id,
-                "trade": trade,
-                "vendor": v.get("name"),
-                "callback_phone": callback_phone,
-                "attachment_ids": attachment_ids,
-            },
+    if not phone:
+        raise HTTPException(status_code=400, detail="Vendor missing phone_e164")
+
+    payload = {
+        "override_agent_id": RETELL_AGENT_ID,
+        "from_number": RETELL_PHONE_NUMBER,
+        "to_number": phone,
+        "metadata": {
+            "source": "railway-direct-test"
         }
+    }
 
-        res = requests.post(
-            RETELL_CALL_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {RETELL_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
+    logger.warning(f"📞 CALLING {phone}")
+    logger.warning(f"📞 PAYLOAD {payload}")
 
-        res.raise_for_status()
-        data = res.json()
-        call_id = data.get("call_id")
+    res = requests.post(
+        RETELL_CALL_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {RETELL_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=30,
+    )
 
-        if call_id and attachment_ids:
-            db.add(
-                CallAttachments(
-                    call_id=call_id,
-                    attachments=attachment_ids,
-                )
-            )
-            await db.commit()
+    logger.warning(f"📞 RETELL STATUS {res.status_code}")
+    logger.warning(f"📞 RETELL BODY {res.text}")
 
-        results.append({
-            "vendor": v.get("name"),
-            "phone": phone,
-            "call_id": call_id,
-        })
+    res.raise_for_status()
 
-    return {"status": "ok", "calls": results}
+    return {
+        "status": "called",
+        "retell_response": res.json(),
+    }
