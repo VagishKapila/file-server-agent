@@ -22,22 +22,25 @@ async def autodial_start(
     trade: str = Form(...),
     vendors: str = Form(...),
     callback_phone: str = Form(...),
-    attachments: str = Form("[]"),  # JSON list of project_file IDs
+    attachments: str = Form("[]"),
     db: AsyncSession = Depends(get_db),
 ):
     if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Missing Retell env")
+
+    vendor_list = json.loads(vendors)
+    logger.warning(f"📞 AUTODIAL VENDORS PARSED: {vendor_list}")
 
     try:
         attachment_ids = json.loads(attachments)
     except Exception:
         attachment_ids = []
 
-    vendor_list = json.loads(vendors)
     results = []
 
     for v in vendor_list:
-        phone = v.get("phone")
+        phone = v.get("phone_e164")   # ✅ FIXED
+
         if not phone:
             continue
 
@@ -50,7 +53,7 @@ async def autodial_start(
                 "trade": trade,
                 "vendor": v.get("name"),
                 "callback_phone": callback_phone,
-                "attachment_ids": attachment_ids,  # 🔑 ONLY IDs
+                "attachment_ids": attachment_ids,
             },
         }
 
@@ -68,14 +71,13 @@ async def autodial_start(
         data = res.json()
         call_id = data.get("call_id")
 
-        # 🔒 HARD BACKUP — DB SOURCE OF TRUTH
         if call_id and attachment_ids:
             db.add(
-            CallAttachments(
-                call_id=call_id,
-                attachments=attachment_ids,   # ✅ CORRECT
+                CallAttachments(
+                    call_id=call_id,
+                    attachments=attachment_ids,
+                )
             )
-        )
             await db.commit()
 
         results.append({
