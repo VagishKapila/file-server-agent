@@ -13,7 +13,7 @@ from ..models.beta_subscriber import BetaSubscriber
 from ..services.resolve_dial import resolve_dial_number
 from app.services.jessica_gateway import start_jessica_call
 
-router = APIRouter(prefix="/autodial", tags=["autodial"])
+router = APIRouter(prefix="/autodial_vapi", tags=["autodial"])
 
 BETA_MODE = os.getenv("BETA_MODE", "false").lower() == "true"
 
