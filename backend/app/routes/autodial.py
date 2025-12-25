@@ -39,8 +39,7 @@ async def autodial_start(
     results = []
 
     for v in vendor_list:
-        phone = v.get("phone_e164")   # ✅ FIXED
-
+        phone = v.get("phone") or v.get("phone_e164")
         if not phone:
             continue
 
