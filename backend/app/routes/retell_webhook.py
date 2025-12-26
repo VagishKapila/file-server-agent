@@ -1,39 +1,43 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
-import os
-import requests
 import logging
+import os
+from sqlalchemy.ext.asyncio import AsyncSession
 
-router = APIRouter()
+from app.db import get_db
+from app.models.activity_log import ActivityLog
+from app.models.email_log import EmailLog
+from app.models.project_files import ProjectFile
+from app.services.unified_email_service import send_project_email
 
+router = APIRouter(prefix="/retell", tags=["retell"])
 logger = logging.getLogger("retell-webhook")
 logger.setLevel(logging.INFO)
 
 
-@router.post("/retell/webhook")
-async def retell_webhook(request: Request):
+@router.post("/webhook")
+async def retell_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Retell Agent Webhook
-    - Extracts post-call data
-    - Confirms email capture
-    - Forwards payload to backend
+    Retell Agent Webhook (FINAL, WORKING)
+    - Reads structured output from Retell
+    - Confirms email
+    - Sends real email using unified_email_service
     """
 
+    # --------------------------------------------------
+    # STEP 0 — PARSE PAYLOAD
+    # --------------------------------------------------
     try:
         data = await request.json()
     except Exception:
         logger.error("❌ RETELL: Failed to parse JSON payload")
         return JSONResponse(status_code=400, content={"error": "invalid json"})
 
-    # --------------------------------------------------
-    # DEBUG
-    # --------------------------------------------------
-    logger.info("🔴 FULL RAW PAYLOAD 🔴")
+    logger.info("🔥 RETELL RAW PAYLOAD")
     logger.info(data)
-
-    logger.info("🔴 TOP LEVEL KEYS 🔴")
-    for k in data.keys():
-        logger.info(f"KEY: {k}")
 
     # --------------------------------------------------
     # STEP A — CONTEXT
@@ -41,13 +45,11 @@ async def retell_webhook(request: Request):
     call_id = (
         data.get("call_id")
         or data.get("call", {}).get("call_id")
-        or data.get("call", {}).get("id")
     )
 
     project_request_id = (
         data.get("metadata", {}).get("project_request_id")
         or data.get("call", {}).get("metadata", {}).get("project_request_id")
-        or None
     )
 
     logger.info(
@@ -55,27 +57,15 @@ async def retell_webhook(request: Request):
     )
 
     # --------------------------------------------------
-    # STEP B — EXTRACT STRUCTURED DATA (RETELL-SAFE)
+    # STEP B — STRUCTURED DATA (RETELL STANDARD)
     # --------------------------------------------------
-    structured = {}
+    structured = (
+        data.get("call", {})
+            .get("call_analysis", {})
+            .get("custom_analysis_data", {})
+    )
 
-    paths = [
-        data.get("structured_output"),
-        data.get("extracted_data"),
-        data.get("post_call", {}).get("extracted_data"),
-        data.get("analysis", {}).get("custom_analysis_data"),
-        data.get("analysis", {}).get("structured_data"),
-        data.get("call", {}).get("analysis", {}).get("custom_analysis_data"),
-        data.get("call", {}).get("analysis", {}).get("structured_data"),
-        data.get("call", {}).get("call_analysis", {}).get("custom_analysis_data"),
-    ]
-
-    for p in paths:
-        if isinstance(p, dict) and p:
-            structured = p
-            break
-
-    logger.info(f"🧠 FINAL STRUCTURED DATA USED: {structured}")
+    logger.info(f"🧠 STRUCTURED DATA: {structured}")
 
     email = structured.get("email")
     email_confirmed = structured.get("email_confirmed") is True
@@ -93,49 +83,71 @@ async def retell_webhook(request: Request):
             content={"status": "ignored", "reason": "email_not_confirmed"},
         )
 
-    logger.info(f"✅ RETELL EMAIL CONFIRMED | email={email} | interest={interest}")
+    logger.info(f"✅ EMAIL CONFIRMED → {email}")
 
     # --------------------------------------------------
-    # STEP D — FORWARD TO BACKEND (NO INDENT BUG)
+    # STEP D — LOAD ATTACHMENTS (WORKING LOGIC)
     # --------------------------------------------------
-    BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
+    attachments = []
 
-    if not BACKEND_BASE_URL:
-        logger.error("❌ BACKEND_BASE_URL IS NOT SET")
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "BACKEND_BASE_URL not configured"},
+    if project_request_id:
+        files = await db.execute(
+            ProjectFile.__table__.select().where(
+                ProjectFile.project_request_id == project_request_id
+            )
         )
 
-    try:
-        r = requests.post(
-            f"{BACKEND_BASE_URL}/retell/webhook",
-            json=data,
-            timeout=10,
-        )
-    except Exception as e:
-        logger.error(f"❌ BACKEND REQUEST FAILED | {str(e)}")
-        return JSONResponse(
-            status_code=502,
-            content={"detail": "Backend request failed"},
-        )
+        for f in files.fetchall():
+            if f.stored_path and os.path.exists(f.stored_path):
+                attachments.append({
+                    "path": f.stored_path,
+                    "name": f.filename,
+                    "type": f.file_type,
+                })
 
-    logger.info(
-        f"➡️ BACKEND RESPONSE | status={r.status_code} | body={r.text}"
+    logger.info(f"📎 ATTACHMENTS FOUND: {len(attachments)}")
+
+    # --------------------------------------------------
+    # STEP E — SEND REAL EMAIL (THIS WAS WORKING)
+    # --------------------------------------------------
+    send_project_email(
+        to_email=email,
+        subject="Project Drawings & Photos",
+        body="Please see the attached drawings and photos.",
+        attachments=attachments,
     )
 
-    if r.status_code >= 300:
-        return JSONResponse(
-            status_code=502,
-            content={
-                "detail": "Backend webhook failed",
-                "backend_status": r.status_code,
-                "backend_response": r.text,
-            },
-        )
+    logger.info(f"📩 EMAIL SENT SUCCESSFULLY → {email}")
 
     # --------------------------------------------------
-    # FINAL ACK
+    # STEP F — LOG ACTIVITY
+    # --------------------------------------------------
+    db.add(
+        EmailLog(
+            project_request_id=project_request_id,
+            recipient_email=email,
+            email_type="subcontractor",
+            related_call_id=call_id,
+        )
+    )
+
+    db.add(
+        ActivityLog(
+            user_id="system",
+            project_id=str(project_request_id),
+            action="retell_email_sent",
+            payload={
+                "email": email,
+                "call_id": call_id,
+                "interest": interest,
+            },
+        )
+    )
+
+    await db.commit()
+
+    # --------------------------------------------------
+    # STEP G — ACK
     # --------------------------------------------------
     return JSONResponse(
         status_code=200,
