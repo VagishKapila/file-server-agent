@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+import os
+import requests
 import logging
 
 router = APIRouter()
@@ -98,19 +100,23 @@ async def retell_webhook(request: Request):
     # STEP D — SEND EMAIL
     # --------------------------------------------------
 
+    BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
+
     try:
-        send_project_email(
-            to_email=email,
-            project_request_id=project_request_id,
-            call_id=call_id,
+        r = requests.post(
+            f"{BACKEND_BASE_URL}/retell/webhook",
+            json=data,
+            timeout=10,
         )
-        logger.info(f"📩 EMAIL SENT SUCCESSFULLY → {email}")
+        logger.info(
+            f"➡️ FORWARDED TO BACKEND | status={r.status_code} | response={r.text}"
+        )
 
     except Exception as e:
-        logger.error(f"❌ EMAIL SEND FAILED → {email} | {str(e)}")
+        logger.error(f"❌ BACKEND FORWARD FAILED | {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"status": "error", "message": "email send failed"},
+            content={"status": "error", "message": "backend forward failed"},
         )
 
     return JSONResponse(
@@ -122,10 +128,3 @@ async def retell_webhook(request: Request):
             "project_request_id": project_request_id,
         },
     )
-
-
-def send_project_email(to_email: str, project_request_id=None, call_id=None):
-    logger.info(
-        f"📨 Sending email | to={to_email} | project_request_id={project_request_id} | call_id={call_id}"
-    )
-    return True
