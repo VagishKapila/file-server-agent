@@ -101,7 +101,13 @@ async def retell_webhook(request: Request):
     # --------------------------------------------------
 
     BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
-
+    if not BACKEND_BASE_URL:
+    logger.error("❌ BACKEND_BASE_URL IS NOT SET")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "BACKEND_BASE_URL not configured"},
+    )
+    
     try:
         r = requests.post(
             f"{BACKEND_BASE_URL}/retell/webhook",
