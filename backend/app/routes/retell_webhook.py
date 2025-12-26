@@ -81,58 +81,45 @@ async def retell_webhook(request: Request):
     email_confirmed = structured.get("email_confirmed") is True
     interest = structured.get("interest")
 
-    # --------------------------------------------------
-    # STEP C — VALIDATION
-    # --------------------------------------------------
-
-    if not email or not email_confirmed:
-        logger.warning(
-            f"🟡 RETELL: Email not confirmed | email={email} | confirmed={email_confirmed}"
+        # --------------------------------------------------
+        # STEP D — SEND EMAIL (FORWARD TO BACKEND)
+        # --------------------------------------------------
+    
+        BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
+    
+        if not BACKEND_BASE_URL:
+            logger.error("❌ BACKEND_BASE_URL IS NOT SET")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "BACKEND_BASE_URL not configured"},
+            )
+    
+        r = requests.post(
+            f"{BACKEND_BASE_URL}/retell/webhook",
+            json=data,
+            timeout=10,
         )
+    
+        logger.info(
+            f"➡️ BACKEND RESPONSE | status={r.status_code} | body={r.text}"
+        )
+    
+        if r.status_code >= 300:
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "detail": "Backend webhook failed",
+                    "backend_status": r.status_code,
+                    "backend_response": r.text,
+                },
+            )
+    
         return JSONResponse(
             status_code=200,
-            content={"status": "ignored", "reason": "email_not_confirmed"},
+            content={
+                "status": "success",
+                "email": email,
+                "call_id": call_id,
+                "project_request_id": project_request_id,
+            },
         )
-
-    logger.info(f"✅ RETELL EMAIL CONFIRMED | email={email}")
-
-    # --------------------------------------------------
-    # STEP D — SEND EMAIL
-    # --------------------------------------------------
-
-    BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
-    if not BACKEND_BASE_URL:
-    logger.error("❌ BACKEND_BASE_URL IS NOT SET")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "BACKEND_BASE_URL not configured"},
-    )
-    
-    r = requests.post(
-    f"{BACKEND_BASE_URL}/retell/webhook",
-    json=data,
-    timeout=10,
-)
-
-logger.info(
-    f"➡️ BACKEND RESPONSE | status={r.status_code} | body={r.text}"
-)
-
-if r.status_code >= 300:
-    return JSONResponse(
-        status_code=502,
-        content={
-            "detail": "Backend webhook failed",
-            "backend_status": r.status_code,
-            "backend_response": r.text,
-        },
-    )
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "success",
-            "email": email,
-            "call_id": call_id,
-            "project_request_id": project_request_id,
-        },
-    )
