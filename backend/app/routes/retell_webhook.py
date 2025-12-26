@@ -16,7 +16,7 @@ async def retell_webhook(request: Request):
     Retell Agent Webhook
     - Extracts post-call data
     - Confirms email capture
-    - Triggers email sending logic
+    - Forwards payload to backend
     """
 
     try:
@@ -25,7 +25,9 @@ async def retell_webhook(request: Request):
         logger.error("❌ RETELL: Failed to parse JSON payload")
         return JSONResponse(status_code=400, content={"error": "invalid json"})
 
-    # 🔴 FULL DEBUG (SAFE)
+    # --------------------------------------------------
+    # DEBUG
+    # --------------------------------------------------
     logger.info("🔴 FULL RAW PAYLOAD 🔴")
     logger.info(data)
 
@@ -36,7 +38,6 @@ async def retell_webhook(request: Request):
     # --------------------------------------------------
     # STEP A — CONTEXT
     # --------------------------------------------------
-
     call_id = (
         data.get("call_id")
         or data.get("call", {}).get("call_id")
@@ -56,7 +57,6 @@ async def retell_webhook(request: Request):
     # --------------------------------------------------
     # STEP B — EXTRACT STRUCTURED DATA (RETELL-SAFE)
     # --------------------------------------------------
-
     structured = {}
 
     paths = [
@@ -80,10 +80,24 @@ async def retell_webhook(request: Request):
     email = structured.get("email")
     email_confirmed = structured.get("email_confirmed") is True
     interest = structured.get("interest")
-    # --------------------------------------------------
-    # STEP D — SEND EMAIL (FORWARD TO BACKEND)
-    # --------------------------------------------------
 
+    # --------------------------------------------------
+    # STEP C — VALIDATION
+    # --------------------------------------------------
+    if not email or not email_confirmed:
+        logger.warning(
+            f"🟡 RETELL: Email not confirmed | email={email} | confirmed={email_confirmed}"
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"status": "ignored", "reason": "email_not_confirmed"},
+        )
+
+    logger.info(f"✅ RETELL EMAIL CONFIRMED | email={email} | interest={interest}")
+
+    # --------------------------------------------------
+    # STEP D — FORWARD TO BACKEND (NO INDENT BUG)
+    # --------------------------------------------------
     BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
 
     if not BACKEND_BASE_URL:
@@ -93,11 +107,18 @@ async def retell_webhook(request: Request):
             content={"detail": "BACKEND_BASE_URL not configured"},
         )
 
-    r = requests.post(
-        f"{BACKEND_BASE_URL}/retell/webhook",
-        json=data,
-        timeout=10,
-    )
+    try:
+        r = requests.post(
+            f"{BACKEND_BASE_URL}/retell/webhook",
+            json=data,
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error(f"❌ BACKEND REQUEST FAILED | {str(e)}")
+        return JSONResponse(
+            status_code=502,
+            content={"detail": "Backend request failed"},
+        )
 
     logger.info(
         f"➡️ BACKEND RESPONSE | status={r.status_code} | body={r.text}"
@@ -113,6 +134,9 @@ async def retell_webhook(request: Request):
             },
         )
 
+    # --------------------------------------------------
+    # FINAL ACK
+    # --------------------------------------------------
     return JSONResponse(
         status_code=200,
         content={
