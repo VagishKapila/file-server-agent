@@ -108,23 +108,25 @@ async def retell_webhook(request: Request):
         content={"detail": "BACKEND_BASE_URL not configured"},
     )
     
-    try:
-        r = requests.post(
-            f"{BACKEND_BASE_URL}/retell/webhook",
-            json=data,
-            timeout=10,
-        )
-        logger.info(
-            f"➡️ FORWARDED TO BACKEND | status={r.status_code} | response={r.text}"
-        )
+    r = requests.post(
+    f"{BACKEND_BASE_URL}/retell/webhook",
+    json=data,
+    timeout=10,
+)
 
-    except Exception as e:
-        logger.error(f"❌ BACKEND FORWARD FAILED | {str(e)}")
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": "backend forward failed"},
-        )
+logger.info(
+    f"➡️ BACKEND RESPONSE | status={r.status_code} | body={r.text}"
+)
 
+if r.status_code >= 300:
+    return JSONResponse(
+        status_code=502,
+        content={
+            "detail": "Backend webhook failed",
+            "backend_status": r.status_code,
+            "backend_response": r.text,
+        },
+    )
     return JSONResponse(
         status_code=200,
         content={
