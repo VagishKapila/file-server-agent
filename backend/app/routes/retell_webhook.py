@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import logging
-from datetime import datetime
 
 router = APIRouter()
 
@@ -20,15 +19,20 @@ async def retell_webhook(request: Request):
 
     try:
         data = await request.json()
-    except Exception as e:
+    except Exception:
         logger.error("❌ RETELL: Failed to parse JSON payload")
         return JSONResponse(status_code=400, content={"error": "invalid json"})
 
-    logger.info("📞 RETELL WEBHOOK RECEIVED")
-    logger.info(f"RAW PAYLOAD: {data}")
+    # 🔴 FULL DEBUG (SAFE)
+    logger.info("🔴 FULL RAW PAYLOAD 🔴")
+    logger.info(data)
+
+    logger.info("🔴 TOP LEVEL KEYS 🔴")
+    for k in data.keys():
+        logger.info(f"KEY: {k}")
 
     # --------------------------------------------------
-    # STEP A — IDENTIFY CALL + PROJECT CONTEXT
+    # STEP A — CONTEXT
     # --------------------------------------------------
 
     call_id = (
@@ -37,8 +41,6 @@ async def retell_webhook(request: Request):
         or data.get("call", {}).get("id")
     )
 
-    # Project Request ID is OPTIONAL — Retell does NOT send it
-    # We default safely instead of blocking email
     project_request_id = (
         data.get("metadata", {}).get("project_request_id")
         or data.get("call", {}).get("metadata", {}).get("project_request_id")
@@ -50,29 +52,35 @@ async def retell_webhook(request: Request):
     )
 
     # --------------------------------------------------
-    # STEP B — EXTRACT POST-CALL DATA (THE FIX)
+    # STEP B — EXTRACT STRUCTURED DATA (RETELL-SAFE)
     # --------------------------------------------------
-    # Retell sends extracted fields here:
-    # call.call_analysis.custom_analysis_data
 
-    structured = (
-        data.get("structured_output")
-        or data.get("extracted_data")
-        or data.get("conversation", {}).get("structured_output")
-        or data.get("call", {})
-            .get("call_analysis", {})
-            .get("custom_analysis_data")
-        or {}
-    )
+    structured = {}
 
-    logger.info(f"🧠 EXTRACTED DATA: {structured}")
+    paths = [
+        data.get("structured_output"),
+        data.get("extracted_data"),
+        data.get("post_call", {}).get("extracted_data"),
+        data.get("analysis", {}).get("custom_analysis_data"),
+        data.get("analysis", {}).get("structured_data"),
+        data.get("call", {}).get("analysis", {}).get("custom_analysis_data"),
+        data.get("call", {}).get("analysis", {}).get("structured_data"),
+        data.get("call", {}).get("call_analysis", {}).get("custom_analysis_data"),
+    ]
+
+    for p in paths:
+        if isinstance(p, dict) and p:
+            structured = p
+            break
+
+    logger.info(f"🧠 FINAL STRUCTURED DATA USED: {structured}")
 
     email = structured.get("email")
     email_confirmed = structured.get("email_confirmed") is True
     interest = structured.get("interest")
 
     # --------------------------------------------------
-    # STEP C — VALIDATION (NO MORE BLOCKING)
+    # STEP C — VALIDATION
     # --------------------------------------------------
 
     if not email or not email_confirmed:
@@ -84,12 +92,10 @@ async def retell_webhook(request: Request):
             content={"status": "ignored", "reason": "email_not_confirmed"},
         )
 
-    logger.info(
-        f"✅ RETELL EMAIL CONFIRMED | email={email} | interest={interest}"
-    )
+    logger.info(f"✅ RETELL EMAIL CONFIRMED | email={email}")
 
     # --------------------------------------------------
-    # STEP D — SEND EMAIL (PROJECT ID OPTIONAL)
+    # STEP D — SEND EMAIL
     # --------------------------------------------------
 
     try:
@@ -98,7 +104,6 @@ async def retell_webhook(request: Request):
             project_request_id=project_request_id,
             call_id=call_id,
         )
-
         logger.info(f"📩 EMAIL SENT SUCCESSFULLY → {email}")
 
     except Exception as e:
@@ -107,10 +112,6 @@ async def retell_webhook(request: Request):
             status_code=500,
             content={"status": "error", "message": "email send failed"},
         )
-
-    # --------------------------------------------------
-    # STEP E — FINAL ACK
-    # --------------------------------------------------
 
     return JSONResponse(
         status_code=200,
@@ -123,19 +124,8 @@ async def retell_webhook(request: Request):
     )
 
 
-# --------------------------------------------------
-# EMAIL SENDER (EXAMPLE / EXISTING)
-# --------------------------------------------------
-
 def send_project_email(to_email: str, project_request_id=None, call_id=None):
-    """
-    Your existing email logic goes here.
-    DO NOT require project_request_id.
-    """
     logger.info(
         f"📨 Sending email | to={to_email} | project_request_id={project_request_id} | call_id={call_id}"
     )
-
-    # Example placeholder
-    # email_service.send(...)
     return True
