@@ -2,10 +2,16 @@ from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 import os
 import logging
-import requests   # ✅ REQUIRED
+import requests
 from fastapi.middleware.cors import CORSMiddleware
 
+# EXISTING
 from autodial import router as autodial_router
+
+# 🔥 ADD THESE
+from app.routes.report_export import router as report_export_router
+from app.routes.project_files import router as project_files_router
+from app.routes.subcontractor_email import router as email_router
 
 load_dotenv()
 
@@ -16,6 +22,11 @@ app = FastAPI(title="Railway Webhook Relay")
 
 # ---------------- ROUTERS ----------------
 app.include_router(autodial_router)
+
+# 🔥 ADD THESE ROUTERS
+app.include_router(report_export_router)
+app.include_router(project_files_router)
+app.include_router(email_router)
 
 # ---------------- MIDDLEWARE ----------------
 app.add_middleware(
