@@ -6,7 +6,7 @@ import requests   # ✅ REQUIRED
 from fastapi.middleware.cors import CORSMiddleware
 
 from autodial import router as autodial_router
-from app.routes.debug_files import router as debug_files_router
+
 
 load_dotenv()
 
