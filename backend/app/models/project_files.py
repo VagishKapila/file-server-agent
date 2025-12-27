@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from sqlalchemy.sql import func
 from app.db import Base
 
-
 class ProjectFile(Base):
     __tablename__ = "project_files"
 
