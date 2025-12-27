@@ -122,6 +122,8 @@ def health():
 @app.get("/debug/env")
 def debug_env():
     return {
+        "FILE_SERVER_BASE_URL": os.getenv("FILE_SERVER_BASE_URL"),
+        "UPLOAD_DIR": os.getenv("UPLOAD_DIR"),
         "VAPI_API_KEY_loaded": bool(os.getenv("VAPI_API_KEY")),
         "VAPI_PRIVATE_KEY_loaded": bool(os.getenv("VAPI_PRIVATE_KEY")),
         "VAPI_ASSISTANT_ID": os.getenv("VAPI_ASSISTANT_ID"),
