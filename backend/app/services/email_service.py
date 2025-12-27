@@ -30,10 +30,17 @@ def send_project_email(to_email, subject, body, attachments):
             continue
 
         with open(path, "rb") as f:
+            mime_type, _ = mimetypes.guess_type(filename)
+            maintype, subtype = (
+                mime_type.split("/", 1)
+                if mime_type
+                else ("application", "octet-stream")
+            )
+
             msg.add_attachment(
                 f.read(),
-                maintype="application",
-                subtype="pdf",
+                maintype=maintype,
+                subtype=subtype,
                 filename=filename,
             )
             attached += 1
