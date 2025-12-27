@@ -1,5 +1,5 @@
-import os, uuid, hashlib
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+import os, uuid
+from fastapi import APIRouter, UploadFile, File, Form, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pathlib import Path
 
@@ -12,7 +12,7 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR")
 if not UPLOAD_DIR:
     raise RuntimeError("UPLOAD_DIR must be set")
 
-UPLOAD_PATH = Path(os.getenv("UPLOAD_DIR", "uploads"))
+UPLOAD_PATH = Path(UPLOAD_DIR)
 UPLOAD_PATH.mkdir(parents=True, exist_ok=True)
 
 
@@ -26,7 +26,6 @@ async def upload_project_files(
 
     for file in files:
         data = await file.read()
-        checksum = hashlib.md5(data).hexdigest()
 
         ext = Path(file.filename).suffix
         stored_name = f"{uuid.uuid4().hex}{ext}"
@@ -38,10 +37,9 @@ async def upload_project_files(
         record = ProjectFile(
             project_request_id=project_request_id,
             filename=file.filename,
-            stored_path=str(stored_path),   # ✅ ONLY SOURCE OF TRUTH
+            stored_path=str(stored_path),
             file_type=file.content_type,
             file_size=len(data),
-            checksum=checksum,
         )
 
         db.add(record)

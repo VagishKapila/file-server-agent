@@ -21,6 +21,7 @@ if not DATABASE_URL:
 # SQLAlchemy Base
 # -----------------------------------
 Base = declarative_base()
+Base.metadata.clear()
 
 # -----------------------------------
 # ASYNC ENGINE + SESSION

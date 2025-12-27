@@ -1,60 +1,51 @@
 import os
-import smtplib
 import logging
 from email.message import EmailMessage
-from pathlib import Path
+import smtplib
 
 logger = logging.getLogger("email-service")
 
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
-def send_email_with_attachments(
-    to_email: str,
-    subject: str,
-    body: str,
-    attachments: list[dict],
-):
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
-    from_email = os.getenv("FROM_EMAIL", smtp_user)
 
-    upload_dir = os.getenv("UPLOAD_DIR")
-    if not upload_dir:
-        raise RuntimeError("UPLOAD_DIR missing")
-
-    upload_path = Path(upload_dir)
-
+def send_project_email(to_email, subject, body, attachments):
     msg = EmailMessage()
-    msg["From"] = from_email
+    msg["From"] = FROM_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
     msg.set_content(body)
 
-    attached = []
+    attached = 0
 
     for a in attachments:
-        stored = a["stored_filename"]
-        name = a["filename"]
+        path = a.get("path")
+        filename = a.get("filename")
 
-        path = upload_path / stored
-        if not path.exists():
-            logger.error("❌ Missing attachment on disk: %s", path)
+        if not path or not os.path.exists(path):
+            logger.warning("Skipping missing attachment: %s", path)
             continue
 
         with open(path, "rb") as f:
             msg.add_attachment(
                 f.read(),
                 maintype="application",
-                subtype="octet-stream",
-                filename=name,
+                subtype="pdf",
+                filename=filename,
             )
+            attached += 1
 
-        attached.append(name)
+    logger.info("Attachments added: %d", attached)
 
-    logger.info("📧 Sending email → %s | files=%s", to_email, attached)
+    if attached == 0:
+        logger.warning("No attachments added — sending email without files")
 
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
-        server.login(smtp_user, smtp_pass)
+        server.login(SMTP_USER, SMTP_PASS)
         server.send_message(msg)
+
+    logger.info("Email sent to %s", to_email)

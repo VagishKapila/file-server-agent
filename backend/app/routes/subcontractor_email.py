@@ -51,7 +51,7 @@ async def send_vendor_email(
 
     attachments = [
         {
-            "stored_filename": f.stored_filename,
+            "path": f.stored_path,
             "filename": f.filename,
         }
         for f in files
