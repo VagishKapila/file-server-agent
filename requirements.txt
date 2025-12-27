@@ -10,3 +10,4 @@ aiofiles>=23.2.1
 requests
 asyncpg>=0.29.0
 python-multipart
+requests
