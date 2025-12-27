@@ -7,15 +7,12 @@ class ProjectFile(Base):
     __tablename__ = "project_files"
 
     id = Column(Integer, primary_key=True)
-    project_request_id = Column(Integer, index=True, nullable=False)
-
-    filename = Column(Text, nullable=False)            # original
-    stored_filename = Column(Text, nullable=False)     # uuid
-    stored_path = Column(Text, nullable=False)         # full disk path
-
-    file_type = Column(Text)                           # MIME
+    project_request_id = Column(Integer, index=True)
+    filename = Column(String)
+    stored_path = Column(String)        # ✅ SINGLE SOURCE OF TRUTH
+    file_type = Column(String)
     file_size = Column(Integer)
-    checksum = Column(Text)
+    checksum = Column(String)
     shared = Column(Boolean, default=False)
 
     uploaded_at = Column(
