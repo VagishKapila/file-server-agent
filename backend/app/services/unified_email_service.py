@@ -1,8 +1,10 @@
 import os
 import logging
-from typing import List, Dict
+import tempfile
+import requests
 from email.message import EmailMessage
 import smtplib
+from typing import List, Dict
 
 logger = logging.getLogger("email-service")
 
@@ -20,12 +22,9 @@ def send_project_email(
     attachments: List[Dict],
 ):
     """
-    attachments = [
-        {
-            "filename": "AI_Report.pdf",
-            "path": "/data/uploads/projects/0/xxxx.pdf"
-        }
-    ]
+    attachments may contain:
+    - { filename, path }   (local)
+    - { filename, url }    (remote HTTP)
     """
 
     msg = EmailMessage()
@@ -37,13 +36,37 @@ def send_project_email(
     attached = 0
 
     for a in attachments:
-        path = a.get("path")
         filename = a.get("filename")
 
-        if not path or not os.path.exists(path):
-            logger.error("❌ Attachment missing on disk: %s", path)
-            continue
+        # -------------------------
+        # CASE 1: HTTP URL
+        # -------------------------
+        if "url" in a:
+            try:
+                logger.info("⬇️ Downloading attachment %s", a["url"])
+                r = requests.get(a["url"], timeout=30)
+                r.raise_for_status()
 
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp.write(r.content)
+                    path = tmp.name
+
+            except Exception as e:
+                logger.error("❌ Failed to download %s: %s", a["url"], e)
+                continue
+
+        # -------------------------
+        # CASE 2: Local path
+        # -------------------------
+        else:
+            path = a.get("path")
+            if not path or not os.path.exists(path):
+                logger.error("❌ Attachment missing on disk: %s", path)
+                continue
+
+        # -------------------------
+        # ATTACH
+        # -------------------------
         with open(path, "rb") as f:
             data = f.read()
 
