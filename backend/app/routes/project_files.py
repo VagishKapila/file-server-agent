@@ -29,8 +29,8 @@ async def upload_project_files(
         checksum = hashlib.md5(data).hexdigest()
 
         ext = Path(file.filename).suffix
-        stored_filename = f"{uuid.uuid4().hex}{ext}"
-        stored_path = UPLOAD_PATH / stored_filename
+        stored_name = f"{uuid.uuid4().hex}{ext}"
+        stored_path = UPLOAD_PATH / stored_name
 
         with open(stored_path, "wb") as f:
             f.write(data)
@@ -38,8 +38,7 @@ async def upload_project_files(
         record = ProjectFile(
             project_request_id=project_request_id,
             filename=file.filename,
-            stored_filename=stored_filename,
-            stored_path=str(stored_path),
+            stored_path=str(stored_path),   # ✅ ONLY SOURCE OF TRUTH
             file_type=file.content_type,
             file_size=len(data),
             checksum=checksum,
