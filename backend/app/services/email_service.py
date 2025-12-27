@@ -49,3 +49,13 @@ def send_project_email(to_email, subject, body, attachments):
         server.send_message(msg)
 
     logger.info("Email sent to %s", to_email)
+
+
+# ✅ Backward-compatible alias (TOP LEVEL)
+def send_email_with_attachments(to_email, subject, body, attachments):
+    return send_project_email(
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        attachments=attachments,
+    )
