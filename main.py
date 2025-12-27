@@ -5,7 +5,6 @@ import logging
 import requests   # ✅ REQUIRED
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.report_export import router as report_export_router
-app.include_router(report_export_router)
 
 from autodial import router as autodial_router
 
