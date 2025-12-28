@@ -22,7 +22,7 @@ R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")
 def _load_attachment(path: str) -> bytes | None:
     """
     Supports:
-      - r2://bucket/key  (Cloudflare R2)
+      - r2://bucket/key  (Cloudflare R2 public access)
       - local filesystem paths
     """
 
@@ -33,16 +33,17 @@ def _load_attachment(path: str) -> bytes | None:
             return None
 
         try:
-            # r2://bucket/key
+            # r2://bucket/key → key ONLY (bucket already in base)
             _, rest = path.split("r2://", 1)
-            bucket, key = rest.split("/", 1)
-            url = f"{R2_PUBLIC_BASE}/{bucket}/{key}"
+            _, key = rest.split("/", 1)
+
+            url = f"{R2_PUBLIC_BASE}/{key}"
         except ValueError:
             logger.error("Invalid r2 path: %s", path)
             return None
 
         try:
-            r = requests.get(url, timeout=20)
+            r = requests.get(url, timeout=30)
             r.raise_for_status()
             return r.content
         except Exception as e:
