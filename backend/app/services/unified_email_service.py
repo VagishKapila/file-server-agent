@@ -2,8 +2,9 @@ import os
 import logging
 import mimetypes
 import smtplib
-import requests
 from email.message import EmailMessage
+
+from app.services.storage_service import download_bytes
 
 logger = logging.getLogger("email-service")
 
@@ -13,41 +14,27 @@ SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
-# REQUIRED for R2 downloads
-R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")
-# example:
-# https://<account>.r2.cloudflarestorage.com
-
 
 def _load_attachment(path: str) -> bytes | None:
     """
     Supports:
-      - r2://bucket/key  (Cloudflare R2 public access)
+      - r2://bucket/key  (PRIVATE Cloudflare R2 via boto3)
       - local filesystem paths
     """
 
-    # ---------------- R2 ----------------
+    # ---------------- R2 (PRIVATE, CORRECT WAY) ----------------
     if path.startswith("r2://"):
-        if not R2_PUBLIC_BASE:
-            logger.error("R2_PUBLIC_BASE not set")
-            return None
-
         try:
-            # r2://bucket/key → key ONLY (bucket already in base)
             _, rest = path.split("r2://", 1)
-            _, key = rest.split("/", 1)
-
-            url = f"{R2_PUBLIC_BASE}/{key}"
+            bucket, key = rest.split("/", 1)
         except ValueError:
             logger.error("Invalid r2 path: %s", path)
             return None
 
         try:
-            r = requests.get(url, timeout=30)
-            r.raise_for_status()
-            return r.content
+            return download_bytes(key)
         except Exception as e:
-            logger.error("Failed to fetch R2 object %s: %s", url, e)
+            logger.error("Failed to download R2 object %s: %s", key, e)
             return None
 
     # ---------------- LOCAL ----------------
