@@ -13,14 +13,16 @@ SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
-R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")  # e.g. https://<account>.r2.cloudflarestorage.com/<bucket>
+# Must be:
+# https://<account-id>.r2.cloudflarestorage.com/<bucket>
+R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")
 
 
 def _load_attachment(path: str) -> bytes | None:
     """
     Supports:
       - local filesystem paths
-      - r2://bucket/key (via HTTP fetch)
+      - r2://bucket/key  → fetched via HTTPS
     """
 
     # ---------- R2 ----------
@@ -29,7 +31,10 @@ def _load_attachment(path: str) -> bytes | None:
             logger.error("R2_PUBLIC_BASE not set")
             return None
 
-        key = path.replace("r2://", "", 1)
+        # r2://bucket/key → key
+        _, _, remainder = path.partition("://")
+        _, _, key = remainder.partition("/")
+
         url = f"{R2_PUBLIC_BASE}/{key}"
 
         try:
@@ -61,7 +66,7 @@ def send_project_email(to_email, subject, body, attachments):
         path = a.get("path")
         filename = a.get("filename")
 
-        if not path:
+        if not path or not filename:
             continue
 
         data = _load_attachment(path)
@@ -94,7 +99,7 @@ def send_project_email(to_email, subject, body, attachments):
 
 
 def send_email_with_attachments(to_email, subject, body, attachments):
-    return send_project_email(
+    send_project_email(
         to_email=to_email,
         subject=subject,
         body=body,

@@ -8,19 +8,28 @@ from app.services.storage_service import upload_bytes
 def generate_project_report_pdf(report_data: dict) -> dict:
     """
     Generates a project PDF IN MEMORY and uploads to R2.
-
-    Returns:
-        {
-            "r2_key": str,
-            "file_size": int,
-            "filename": str
-        }
     """
 
+    # ---------------- SAFETY CHECKS ----------------
+    if not report_data or not isinstance(report_data, dict):
+        raise ValueError("report_data is empty or invalid")
+
+    project_request_id = report_data.get("project_request_id")
+    if not project_request_id:
+        raise ValueError("project_request_id missing from report_data")
+
+    subcontractors = report_data.get("subcontractors") or []
+    if not isinstance(subcontractors, list):
+        raise ValueError("subcontractors must be a list")
+
+    materials = report_data.get("materials") or []
+    if not isinstance(materials, list):
+        raise ValueError("materials must be a list")
+
+    # ---------------- PDF SETUP ----------------
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=LETTER)
     width, height = LETTER
-
     y = height - 50
 
     # ---------------- HEADER ----------------
@@ -29,11 +38,7 @@ def generate_project_report_pdf(report_data: dict) -> dict:
     y -= 30
 
     pdf.setFont("Helvetica", 11)
-    pdf.drawString(
-        50,
-        y,
-        f"Project Request ID: {report_data.get('project_request_id')}",
-    )
+    pdf.drawString(50, y, f"Project Request ID: {project_request_id}")
     y -= 30
 
     # ---------------- SUBCONTRACTORS ----------------
@@ -42,7 +47,11 @@ def generate_project_report_pdf(report_data: dict) -> dict:
     y -= 20
 
     pdf.setFont("Helvetica", 10)
-    for sub in report_data.get("subcontractors", []):
+
+    for sub in subcontractors:
+        if not isinstance(sub, dict):
+            continue
+
         lines = [
             f"- {sub.get('company', '—')} ({sub.get('trade', '—')})",
             f"  Open to Bid: {sub.get('open_to_bid', '—')}",
@@ -63,7 +72,6 @@ def generate_project_report_pdf(report_data: dict) -> dict:
         y -= 10
 
     # ---------------- MATERIALS ----------------
-    materials = report_data.get("materials", [])
     if materials:
         if y < 120:
             pdf.showPage()
@@ -74,7 +82,11 @@ def generate_project_report_pdf(report_data: dict) -> dict:
         y -= 20
 
         pdf.setFont("Helvetica", 10)
+
         for m in materials:
+            if not isinstance(m, dict):
+                continue
+
             lines = [
                 f"- {m.get('vendor', '—')} ({m.get('category', '—')})",
                 f"  Price: {m.get('price', '—')} {m.get('currency', '')}",
@@ -92,11 +104,12 @@ def generate_project_report_pdf(report_data: dict) -> dict:
 
             y -= 10
 
+    # ---------------- SAVE & UPLOAD ----------------
     pdf.save()
     buffer.seek(0)
 
-    filename = f"project_report_{report_data['project_request_id']}.pdf"
-    r2_key = f"reports/{report_data['project_request_id']}/{filename}"
+    filename = f"project_report_{project_request_id}.pdf"
+    r2_key = f"reports/{project_request_id}/{filename}"
 
     r2_uri, size = upload_bytes(
         data=buffer.read(),
