@@ -1,25 +1,29 @@
-import os
+import io
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfgen import canvas
 
-# Canonical upload root
-UPLOAD_ROOT = os.getenv("UPLOAD_DIR", "/app/bains_uploads")
+from app.services.storage_service import upload_bytes
 
 
-def generate_project_report_pdf(report_data: dict, output_path: str):
+def generate_project_report_pdf(report_data: dict) -> dict:
     """
-    Generates a project outreach PDF using reportlab
-    and writes it to a persistent path under UPLOAD_DIR.
+    Generates a project PDF IN MEMORY and uploads to R2.
+
+    Returns:
+        {
+            "r2_key": str,
+            "file_size": int,
+            "filename": str
+        }
     """
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    pdf = canvas.Canvas(output_path, pagesize=LETTER)
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=LETTER)
     width, height = LETTER
 
     y = height - 50
 
-    # ---- Header ----
+    # ---------------- HEADER ----------------
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(50, y, "Project Outreach Report")
     y -= 30
@@ -32,7 +36,7 @@ def generate_project_report_pdf(report_data: dict, output_path: str):
     )
     y -= 30
 
-    # ---- Subcontractors ----
+    # ---------------- SUBCONTRACTORS ----------------
     pdf.setFont("Helvetica-Bold", 13)
     pdf.drawString(50, y, "Subcontractors")
     y -= 20
@@ -58,7 +62,7 @@ def generate_project_report_pdf(report_data: dict, output_path: str):
 
         y -= 10
 
-    # ---- Materials ----
+    # ---------------- MATERIALS ----------------
     materials = report_data.get("materials", [])
     if materials:
         if y < 120:
@@ -89,3 +93,20 @@ def generate_project_report_pdf(report_data: dict, output_path: str):
             y -= 10
 
     pdf.save()
+    buffer.seek(0)
+
+    filename = f"project_report_{report_data['project_request_id']}.pdf"
+    r2_key = f"reports/{report_data['project_request_id']}/{filename}"
+
+    r2_uri, size = upload_bytes(
+        data=buffer.read(),
+        key=r2_key,
+        content_type="application/pdf",
+    )
+
+    return {
+        "r2_uri": r2_uri,
+        "r2_key": r2_key,
+        "filename": filename,
+        "file_size": size,
+    }
