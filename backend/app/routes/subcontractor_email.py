@@ -1,111 +1,94 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from typing import List, Union
 import logging
-import os
 
 from app.db import get_db
 from app.models.project_files import ProjectFile
-from app.services.email_service import send_email_with_attachments
+from app.services.unified_email_service import send_project_email
 
-router = APIRouter(prefix="/email/sub", tags=["email"])
-logger = logging.getLogger("vendor-email")
+router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
+logger = logging.getLogger("subcontractor-email")
 
 
 @router.post("/send")
-async def send_vendor_email(
-    payload: dict,
+async def send_subcontractor_email(
+    vendor_email: str,
+    project_request_id: int,
+    subject: str,
+    message: str,
+    attachments: List[Union[int, dict]],
     db: AsyncSession = Depends(get_db),
 ):
-    logger.info("📞 /email/sub/send called")
+    """
+    attachments supports:
+    - integer ProjectFile IDs
+    - OR { path: "r2://...", filename: "..." }
+    """
 
-    vendor_email = payload.get("vendor_email")
-    attachment_ids = payload.get("attachments", [])
-    project_request_id = payload.get("project_request_id")
-    subject = payload.get("subject", "Project Files")
-    message = payload.get("message", "Please see attached files.")
+    resolved_attachments = []
 
-    if not vendor_email:
-        raise HTTPException(status_code=400, detail="vendor_email required")
+    for a in attachments:
+        # ----------------------------------
+        # CASE 1: DB attachment by ID
+        # ----------------------------------
+        if isinstance(a, int):
+            stmt = select(ProjectFile).where(ProjectFile.id == a)
+            res = await db.execute(stmt)
+            file = res.scalars().first()
 
-    # --------------------------------------------------
-    # RESOLVE ATTACHMENTS
-    # --------------------------------------------------
-    files = []
+            if not file:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Attachment ID {a} not found",
+                )
 
-    # OPTION A: explicit attachment IDs
-    if attachment_ids:
-        if not all(isinstance(i, int) for i in attachment_ids):
-            raise HTTPException(
-                status_code=400,
-                detail="attachments must be integer IDs",
+            resolved_attachments.append(
+                {
+                    "path": file.stored_path,
+                    "filename": file.filename,
+                }
             )
 
-        logger.info("📎 Resolving attachments by IDs: %s", attachment_ids)
+        # ----------------------------------
+        # CASE 2: Direct R2 / path attachment
+        # ----------------------------------
+        elif isinstance(a, dict):
+            if "path" not in a or "filename" not in a:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Attachment objects must include path and filename",
+                )
 
-        q = select(ProjectFile).where(ProjectFile.id.in_(attachment_ids))
-        result = await db.execute(q)
-        files = result.scalars().all()
+            resolved_attachments.append(
+                {
+                    "path": a["path"],
+                    "filename": a["filename"],
+                }
+            )
 
-    # OPTION B: auto-attach by project_request_id
-    elif project_request_id:
-        logger.info(
-            "📎 Resolving attachments by project_request_id=%s",
-            project_request_id,
-        )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid attachment format",
+            )
 
-        q = select(ProjectFile).where(
-            ProjectFile.project_request_id == project_request_id
-        )
-        result = await db.execute(q)
-        files = result.scalars().all()
-
-    if not files:
-        logger.warning("❌ No files found to attach")
-        raise HTTPException(status_code=404, detail="No files found to attach")
-
-    # Build attachment payload
-    attachments = [
-        {
-            "path": f.stored_path,
-            "filename": f.filename,
-        }
-        for f in files
-    ]
-
-    logger.info(
-        "📧 Sending email to=%s attachments=%d",
-        vendor_email,
-        len(attachments),
-    )
-
-    # --------------------------------------------------
-    # ATTACHMENT DIAGNOSTICS (READ-ONLY)
-    # --------------------------------------------------
-    for a in attachments:
-        logger.info(
-            "📂 Attachment resolved filename=%s path=%s exists=%s",
-            a["filename"],
-            a["path"],
-            os.path.exists(a["path"]) if a.get("path") else None,
-        )
-
-    # --------------------------------------------------
-    # SEND EMAIL
-    # --------------------------------------------------
-    logger.info("✉️ Calling send_email_with_attachments")
-
-    send_email_with_attachments(
+    send_project_email(
         to_email=vendor_email,
         subject=subject,
         body=message,
-        attachments=attachments,
+        attachments=resolved_attachments,
     )
 
-    logger.info("✅ Email send invoked successfully")
+    logger.info(
+        "Email sent to %s with %s attachments",
+        vendor_email,
+        len(resolved_attachments),
+    )
 
     return {
-        "status": "sent",
-        "vendor_email": vendor_email,
-        "attachments": [a["filename"] for a in attachments],
+        "status": "ok",
+        "sent_to": vendor_email,
+        "attachments": len(resolved_attachments),
     }
