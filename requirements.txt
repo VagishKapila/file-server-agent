@@ -11,3 +11,5 @@ requests
 asyncpg>=0.29.0
 python-multipart
 requests
+boto3
+botocore
