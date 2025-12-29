@@ -1,10 +1,12 @@
+# app/services/unified_email_service.py
+
 import os
 import logging
 import mimetypes
 import smtplib
 from email.message import EmailMessage
 
-from app.services.r2download import download_r2_object
+from app.services.storage_service import download_bytes
 
 logger = logging.getLogger("email-service")
 
@@ -20,26 +22,28 @@ def send_project_email(to_email, subject, body, attachments):
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.set_content(body or "")
+    msg.set_content(body)
 
     attached = 0
 
-    for a in (attachments or []):
+    for a in attachments:
         path = a.get("path")
-        filename = a.get("filename") or a.get("name")
+        filename = a.get("filename")
 
         if not path or not filename:
-            logger.warning("Skipping attachment (missing fields): %s", a)
             continue
 
-        # ✅ R2 only (for now)
+        # ✅ ONLY r2:// paths
         if not path.startswith("r2://"):
-            logger.info("Skipping non-R2 attachment path=%s", path)
             continue
 
-        data = download_r2_object(path)
-        if not data:
-            logger.warning("Skipping attachment (download failed): %s", path)
+        try:
+            _, rest = path.split("r2://", 1)
+            _, key = rest.split("/", 1)
+
+            data = download_bytes(key)
+        except Exception as e:
+            logger.error("Failed to download R2 object %s: %s", path, e)
             continue
 
         mime_type, _ = mimetypes.guess_type(filename)
