@@ -1,5 +1,3 @@
-# file-server/autodial.py
-
 from fastapi import APIRouter, Form, HTTPException
 import os, json, requests, logging
 
@@ -20,27 +18,25 @@ async def autodial_start(
     callback_phone: str = Form(...),
 ):
     """
-    🔒 FILE-SERVER RELAY ONLY
-    Backend owns dialing + test enforcement
+    File-server relay → backend autodial (Jessica / VAPI)
     """
 
-    # Validate vendors JSON early
     try:
         json.loads(vendors)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid vendors JSON")
 
-    logger.info("➡️ Forwarding autodial request to backend (FORM MODE)")
+    logger.info("➡️ Relaying autodial to backend VAPI")
 
-    # ⚠️ IMPORTANT: MUST BE form-data
     r = requests.post(
-        f"{BACKEND_BASE_URL}/autodial/start",
+        f"{BACKEND_BASE_URL}/autodial_vapi/start",
         data={
             "project_request_id": project_request_id,
             "project_address": project_address,
             "trade": trade,
             "vendors": vendors,
             "callback_phone": callback_phone,
+            "max_confirmed": 3,
         },
         timeout=30,
     )
