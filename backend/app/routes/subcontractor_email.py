@@ -1,8 +1,8 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Union
-import logging
 from pydantic import BaseModel
 
 from app.db import get_db
@@ -13,9 +13,6 @@ router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
 logger = logging.getLogger("subcontractor-email")
 
 
-# --------------------------------------------------
-# REQUEST SCHEMA (JSON BODY)
-# --------------------------------------------------
 class AttachmentIn(BaseModel):
     path: str
     filename: str
@@ -37,9 +34,8 @@ async def send_subcontractor_email(
     resolved_attachments = []
 
     for a in payload.attachments:
-        # ----------------------------------
-        # CASE 1: DB attachment by ID
-        # ----------------------------------
+
+        # ---------- DB FILE BY ID ----------
         if isinstance(a, int):
             stmt = select(ProjectFile).where(ProjectFile.id == a)
             res = await db.execute(stmt)
@@ -51,6 +47,10 @@ async def send_subcontractor_email(
                     detail=f"Attachment ID {a} not found",
                 )
 
+            # ✅ ONLY R2
+            if not file.stored_path.startswith("r2://"):
+                continue
+
             resolved_attachments.append(
                 {
                     "path": file.stored_path,
@@ -58,10 +58,11 @@ async def send_subcontractor_email(
                 }
             )
 
-        # ----------------------------------
-        # CASE 2: Direct path attachment
-        # ----------------------------------
+        # ---------- DIRECT PATH ----------
         else:
+            if not a.path.startswith("r2://"):
+                continue
+
             resolved_attachments.append(
                 {
                     "path": a.path,

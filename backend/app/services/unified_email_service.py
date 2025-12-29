@@ -4,7 +4,7 @@ import mimetypes
 import smtplib
 from email.message import EmailMessage
 
-from app.services.r2_download import download_r2_object
+from app.services.r2download import download_r2_object
 
 logger = logging.getLogger("email-service")
 
@@ -13,8 +13,6 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
-
-MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25MB
 
 
 def send_project_email(to_email, subject, body, attachments):
@@ -25,24 +23,20 @@ def send_project_email(to_email, subject, body, attachments):
     msg.set_content(body)
 
     attached = 0
-    skipped_large = []
 
     for a in attachments:
         path = a.get("path")
-        filename = a.get("filename") or a.get("name")
+        filename = a.get("filename")
 
         if not path or not filename:
             continue
 
-        # -------- R2 ONLY (no disk dependency) --------
-        data = download_r2_object(path)
-        if not data:
-            logger.warning("Skipping attachment (download failed): %s", path)
+        # ✅ R2 ONLY
+        if not path.startswith("r2://"):
             continue
 
-        # -------- SIZE RULE (future-safe) --------
-        if len(data) > MAX_ATTACHMENT_BYTES:
-            skipped_large.append(filename)
+        data = download_r2_object(path)
+        if not data:
             continue
 
         mime_type, _ = mimetypes.guess_type(filename)
@@ -56,14 +50,10 @@ def send_project_email(to_email, subject, body, attachments):
         )
         attached += 1
 
-    if skipped_large:
-        msg.add_paragraph(
-            "\nLarge files were not attached due to email limits:\n"
-            + "\n".join(f"- {f}" for f in skipped_large)
-        )
+    logger.info("Attachments added: %d", attached)
 
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
-        logger.error("SMTP not configured — email skipped")
+        logger.error("SMTP env not configured — aborting send")
         return
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
@@ -71,4 +61,4 @@ def send_project_email(to_email, subject, body, attachments):
         server.login(SMTP_USER, SMTP_PASS)
         server.send_message(msg)
 
-    logger.info("Email sent to %s | attachments=%s", to_email, attached)
+    logger.info("Email sent to %s", to_email)
