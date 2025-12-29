@@ -7,49 +7,44 @@ import requests
 
 logger = logging.getLogger("r2-download")
 
-# Example (account endpoint):
-#   https://<accountid>.r2.cloudflarestorage.com
-# Example (account endpoint + bucket path):
-#   https://<accountid>.r2.cloudflarestorage.com/<bucket>
-# Example (custom domain already mapped to bucket root):
-#   https://files.yourdomain.com
+# Can be either:
+# 1) Account endpoint (NO bucket in base):
+#    https://<accountid>.r2.cloudflarestorage.com
+# 2) Account endpoint + bucket path:
+#    https://<accountid>.r2.cloudflarestorage.com/<bucket>
+# 3) Custom domain mapped to a bucket root:
+#    https://files.yourdomain.com
 R2_PUBLIC_BASE = (os.getenv("R2_PUBLIC_BASE") or "").rstrip("/")
 
 
 def _parse_r2_uri(r2_uri: str) -> Optional[Tuple[str, str]]:
-    """
-    r2://bucket/key -> (bucket, key)
-    """
+    # r2://bucket/key -> (bucket, key)
     if not r2_uri or not r2_uri.startswith("r2://"):
         return None
-
     rest = r2_uri[len("r2://"):]
     if "/" not in rest:
         return None
-
     bucket, key = rest.split("/", 1)
     if not bucket or not key:
         return None
-
     return bucket, key
 
 
 def _base_includes_bucket(base: str, bucket: str) -> bool:
     """
-    Returns True if base URL already points inside the bucket root.
+    True if base already points at the bucket root.
     Handles:
-      - https://.../bucket
-      - https://bucket.<accountid>.r2.cloudflarestorage.com
+      - https://bucket.<account>.r2.cloudflarestorage.com
+      - https://<account>.r2.cloudflarestorage.com/bucket
     """
     try:
         p = urlparse(base)
-        host = p.netloc.lower()
+        host = (p.netloc or "").lower()
         path = (p.path or "").strip("/")
 
         if host.startswith(bucket.lower() + "."):
             return True
 
-        # base path ends with bucket
         if path == bucket or path.endswith("/" + bucket):
             return True
 
@@ -59,9 +54,6 @@ def _base_includes_bucket(base: str, bucket: str) -> bool:
 
 
 def build_public_url(r2_uri: str) -> Optional[str]:
-    """
-    Builds a public URL from r2://bucket/key based on R2_PUBLIC_BASE.
-    """
     if not R2_PUBLIC_BASE:
         logger.error("R2_PUBLIC_BASE not set")
         return None
@@ -73,19 +65,15 @@ def build_public_url(r2_uri: str) -> Optional[str]:
 
     bucket, key = parsed
 
-    # If base already includes bucket, do: BASE/<key>
+    # If base already includes bucket -> BASE/<key>
     if _base_includes_bucket(R2_PUBLIC_BASE, bucket):
         return f"{R2_PUBLIC_BASE}/{key}"
 
-    # Otherwise do: BASE/<bucket>/<key>
+    # Else -> BASE/<bucket>/<key>
     return f"{R2_PUBLIC_BASE}/{bucket}/{key}"
 
 
 def download_r2_object(r2_uri: str, timeout_s: int = 60) -> Optional[bytes]:
-    """
-    Downloads bytes from public R2 endpoint (no signing).
-    Returns bytes or None.
-    """
     url = build_public_url(r2_uri)
     if not url:
         return None

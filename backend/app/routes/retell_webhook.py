@@ -28,9 +28,7 @@ async def retell_webhook(
     if not email or not confirmed or not project_request_id:
         return {"ok": True}
 
-    stmt = select(ProjectFile).where(
-        ProjectFile.project_request_id == project_request_id
-    )
+    stmt = select(ProjectFile).where(ProjectFile.project_request_id == project_request_id)
     res = await db.execute(stmt)
     files = res.scalars().all()
 

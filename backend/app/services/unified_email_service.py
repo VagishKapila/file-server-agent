@@ -20,23 +20,26 @@ def send_project_email(to_email, subject, body, attachments):
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.set_content(body)
+    msg.set_content(body or "")
 
     attached = 0
 
-    for a in attachments:
+    for a in (attachments or []):
         path = a.get("path")
-        filename = a.get("filename")
+        filename = a.get("filename") or a.get("name")
 
         if not path or not filename:
+            logger.warning("Skipping attachment (missing fields): %s", a)
             continue
 
-        # ✅ R2 ONLY
+        # ✅ R2 only (for now)
         if not path.startswith("r2://"):
+            logger.info("Skipping non-R2 attachment path=%s", path)
             continue
 
         data = download_r2_object(path)
         if not data:
+            logger.warning("Skipping attachment (download failed): %s", path)
             continue
 
         mime_type, _ = mimetypes.guess_type(filename)
@@ -51,6 +54,9 @@ def send_project_email(to_email, subject, body, attachments):
         attached += 1
 
     logger.info("Attachments added: %d", attached)
+
+    if attached == 0:
+        logger.warning("Email sent WITHOUT attachments")
 
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
         logger.error("SMTP env not configured — aborting send")
