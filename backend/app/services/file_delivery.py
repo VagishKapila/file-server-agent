@@ -1,41 +1,25 @@
 from typing import List, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import os
 
 from app.models.project_files import ProjectFile
 
-# -----------------------------------
-# CONFIG
-# -----------------------------------
-
 EMAIL_ATTACHMENT_LIMIT_MB = 20
 
-# Public file server base
-# Railway example:
-# https://file-server-agent-production.up.railway.app
-FILE_SERVER_BASE_URL = os.getenv(
-    "FILE_SERVER_BASE_URL",
-    "http://localhost:8000"
-)
-
-# -----------------------------------
-# MAIN FUNCTION
-# -----------------------------------
 
 async def prepare_files_for_vendor(
     project_request_id: int,
     db: AsyncSession,
 ) -> Dict:
     """
-    Decide whether files should be attached or sent as links.
-    Returns normalized metadata for email / AI agent.
+    Decide attach vs link.
+    ALWAYS preserve r2:// paths for email delivery.
     """
 
-    stmt = select(ProjectFile).where(
-        ProjectFile.project_request_id == project_request_id
+    res = await db.execute(
+        select(ProjectFile)
+        .where(ProjectFile.project_request_id == project_request_id)
     )
-    res = await db.execute(stmt)
     files: List[ProjectFile] = res.scalars().all()
 
     if not files:
@@ -47,36 +31,24 @@ async def prepare_files_for_vendor(
     total_bytes = sum(f.file_size or 0 for f in files)
     total_mb = total_bytes / (1024 * 1024)
 
-    file_payload = []
+    payload = []
 
     for f in files:
-        # Normalize stored path → public URL
-        # Example stored_path:
-        # uploads/projects/203/abc.pdf
-        public_url = f"{FILE_SERVER_BASE_URL}/files/{f.stored_path}"
-
-        file_payload.append({
+        payload.append({
             "filename": f.filename,
-            "stored_path": f.stored_path,
-            "public_url": public_url,
+            "r2_path": f.stored_path if f.stored_path.startswith("r2://") else None,
             "size": f.file_size,
         })
 
-    # -----------------------------------
-    # ATTACH MODE
-    # -----------------------------------
     if total_mb <= EMAIL_ATTACHMENT_LIMIT_MB:
         return {
             "mode": "attach",
             "total_mb": round(total_mb, 2),
-            "files": file_payload,
+            "files": payload,
         }
 
-    # -----------------------------------
-    # LINK MODE
-    # -----------------------------------
     return {
         "mode": "link",
         "total_mb": round(total_mb, 2),
-        "files": file_payload,
+        "files": payload,
     }

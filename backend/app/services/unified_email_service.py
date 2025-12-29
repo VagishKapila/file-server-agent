@@ -1,5 +1,3 @@
-# app/services/unified_email_service.py
-
 import os
 import logging
 import mimetypes
@@ -33,17 +31,15 @@ def send_project_email(to_email, subject, body, attachments):
         if not path or not filename:
             continue
 
-        # ✅ ONLY r2:// paths
         if not path.startswith("r2://"):
             continue
 
         try:
             _, rest = path.split("r2://", 1)
             _, key = rest.split("/", 1)
-
             data = download_bytes(key)
         except Exception as e:
-            logger.error("Failed to download R2 object %s: %s", path, e)
+            logger.error("R2 download failed %s: %s", path, e)
             continue
 
         mime_type, _ = mimetypes.guess_type(filename)
@@ -59,11 +55,8 @@ def send_project_email(to_email, subject, body, attachments):
 
     logger.info("Attachments added: %d", attached)
 
-    if attached == 0:
-        logger.warning("Email sent WITHOUT attachments")
-
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
-        logger.error("SMTP env not configured — aborting send")
+        logger.error("SMTP not configured")
         return
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
