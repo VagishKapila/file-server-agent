@@ -27,30 +27,30 @@ async def retell_webhook(
     if data.get("event") != "call_analyzed":
         return {"ok": True}
 
-    call = data.get("call", {})
-    analysis = data.get("analysis", {}) or {}
-    structured = analysis.get("custom_analysis") or {}
+    call = data.get("call", {}) or {}
 
-    email = structured.get("email")
-    confirmed = structured.get("email_confirmed") is True
+    analysis = (
+        data.get("analysis", {}).get("custom_analysis")
+        or data.get("custom_analysis")
+        or call.get("call_analysis", {}).get("custom_analysis_data")
+        or {}
+    )
+
+    email = analysis.get("email")
+    confirmed = analysis.get("email_confirmed") is True
     vendor_phone = call.get("to_number")
     retell_call_id = call.get("call_id")
 
-    if not email or not confirmed or not vendor_phone:
-        return {"ok": True}
-
-    # ---- Find most recent VendorCall for this phone ----
-    res = await db.execute(
-        select(VendorCall)
-        .where(VendorCall.vendor_phone == vendor_phone)
-        .where(VendorCall.status.in_(["called", "pending"]))
-        .order_by(VendorCall.created_at.desc())
-        .limit(1)
+    logger.error(
+        "🔎 ANALYZED | call_id=%s phone=%s email=%s confirmed=%s analysis=%s",
+        retell_call_id,
+        vendor_phone,
+        email,
+        confirmed,
+        analysis,
     )
-    vendor_call = res.scalar_one_or_none()
 
-    if not vendor_call:
-        logger.warning("RETELL | no VendorCall found for phone=%s", vendor_phone)
+    if not email or not confirmed or not vendor_phone:
         return {"ok": True}
 
     project_request_id = vendor_call.project_request_id
