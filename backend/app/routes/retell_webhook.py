@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, insert
 from sqlalchemy.sql import func
 
 from app.db import get_db
@@ -22,52 +22,49 @@ async def retell_webhook(
     data = await request.json()
     logger.info("🔥 RETELL RAW PAYLOAD: %s", data)
 
-    call = data.get("call", {})
+    # 🔒 ONLY act on analyzed calls
+    if data.get("event") != "call_analyzed":
+        return {"ok": True}
 
-    # ---------- DEFENSIVE EMAIL PARSING (DO NOT TOUCH) ----------
+    call = data.get("call", {})
+    analysis = data.get("analysis", {}) or {}
+
     structured = (
-        data.get("analysis", {}).get("custom_analysis")  # 🔥 REQUIRED FOR REAL CALLS
-        or data.get("custom_analysis")
-        or call.get("custom_analysis")
-        or call.get("call_analysis", {}).get("custom_analysis_data")
+        analysis.get("custom_analysis")
         or {}
     )
 
     email = structured.get("email")
     confirmed = structured.get("email_confirmed") is True
-
-    logger.info(
-        "RETELL EXTRACTED | email=%s confirmed=%s structured=%s",
-        email,
-        confirmed,
-        structured,
-    )
-
-    metadata = call.get("metadata", {}) or {}
-
-    raw_project_id = metadata.get("project_request_id")
-    vendor_call_id = metadata.get("vendor_call_id")
-    trade = metadata.get("trade")
-
     vendor_phone = call.get("to_number")
-
-    try:
-        project_request_id = int(raw_project_id)
-    except (TypeError, ValueError):
-        logger.warning("RETELL | invalid project_request_id: %s", raw_project_id)
-        return {"ok": True}
+    retell_call_id = call.get("call_id")
 
     logger.info(
-        "RETELL PARSED | email=%s confirmed=%s project_request_id=%s vendor_call_id=%s trade=%s",
+        "RETELL ANALYZED | call_id=%s phone=%s email=%s confirmed=%s",
+        retell_call_id,
+        vendor_phone,
         email,
         confirmed,
-        project_request_id,
-        vendor_call_id,
-        trade,
     )
 
-    if not email or not confirmed:
+    if not email or not confirmed or not vendor_phone:
         return {"ok": True}
+
+    # ---------- FIND LATEST VENDOR CALL (SOURCE OF TRUTH) ----------
+    res = await db.execute(
+        select(VendorCall)
+        .where(VendorCall.vendor_phone == vendor_phone)
+        .where(VendorCall.status.in_(["called", "pending"]))
+        .order_by(VendorCall.created_at.desc())
+        .limit(1)
+    )
+    vendor_call = res.scalar_one_or_none()
+
+    if not vendor_call:
+        logger.warning("RETELL | no VendorCall found for phone=%s", vendor_phone)
+        return {"ok": True}
+
+    project_request_id = vendor_call.project_request_id
 
     # ---------- SAVE / GET VENDOR CONTACT ----------
     res = await db.execute(
@@ -83,18 +80,30 @@ async def retell_webhook(
             vendor_phone=vendor_phone,
         )
         db.add(vendor_contact)
-        await db.flush()  # ensures vendor_contact.id exists
+        await db.flush()
 
-    # ---------- LINK VENDOR CALL ----------
-    if vendor_call_id:
-        await db.execute(
-            update(VendorCall)
-            .where(VendorCall.id == int(vendor_call_id))
-            .values(
-                status="confirmed",
-                confirmed_at=func.now(),
-            )
+    # ---------- UPDATE VENDOR CALL ----------
+    await db.execute(
+        update(VendorCall)
+        .where(VendorCall.id == vendor_call.id)
+        .values(
+            status="confirmed",
+            confirmed_at=func.now(),
         )
+    )
+
+    # ---------- AUDIT TRAIL (NON-NEGOTIABLE) ----------
+    await db.execute(
+        insert("retell_call_audit").values(
+            retell_call_id=retell_call_id,
+            to_number=vendor_phone,
+            extracted_email=email,
+            email_confirmed=True,
+            project_request_id=project_request_id,
+            vendor_call_id=vendor_call.id,
+            raw_payload=data,
+        )
+    )
 
     # ---------- FETCH PROJECT FILES ----------
     res = await db.execute(
@@ -104,10 +113,7 @@ async def retell_webhook(
     files = res.scalars().all()
 
     attachments = [
-        {
-            "filename": f.filename,
-            "path": f.stored_path,
-        }
+        {"filename": f.filename, "path": f.stored_path}
         for f in files
         if f.stored_path and f.stored_path.startswith("r2://")
     ]
@@ -122,12 +128,15 @@ async def retell_webhook(
 
     await db.commit()
 
-    logger.info("🔥 EMAIL SENT | attachments=%s", len(attachments))
+    logger.info(
+        "🔥 EMAIL SENT | vendor_call_id=%s attachments=%s",
+        vendor_call.id,
+        len(attachments),
+    )
 
     return {
         "status": "sent",
         "email": email,
+        "vendor_call_id": vendor_call.id,
         "attachments": len(attachments),
-        "vendor_contact_id": vendor_contact.id,
-        "vendor_call_id": vendor_call_id,
     }
