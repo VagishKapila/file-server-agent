@@ -85,7 +85,6 @@ app.include_router(sub_calls_router, prefix="/sub-calls")
 app.include_router(search_router, prefix="/api")
 app.include_router(project_search_router)
 
-app.include_router(autodial.router)
 app.include_router(activity.router, prefix="/activity")
 
 app.include_router(material_requests.router, prefix="/material-requests")
