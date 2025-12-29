@@ -16,11 +16,10 @@ async def retell_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    
     data = await request.json()
     call = data.get("call", {})
 
-    # ✅ FINAL, DEFENSIVE PARSING LOGIC (KEEP THIS)
+    # ✅ FINAL, DEFENSIVE PARSING LOGIC (KEEP)
     structured = (
         data.get("custom_analysis")
         or call.get("custom_analysis")
@@ -30,17 +29,24 @@ async def retell_webhook(
 
     email = structured.get("email")
     confirmed = structured.get("email_confirmed") is True
-    project_request_id = call.get("metadata", {}).get("project_request_id")
+    raw_id = call.get("metadata", {}).get("project_request_id")
 
-    # ✅ KEEP THIS LOG PERMANENTLY (1 line only)
+    try:
+        project_request_id = int(raw_id)
+    except (TypeError, ValueError):
+        logger.warning("RETELL | invalid project_request_id: %s", raw_id)
+        return {"ok": True}
+
+    # ✅ KEEP THIS LOG (safe + valuable)
     logger.info(
         "RETELL PARSED | email=%s confirmed=%s project_request_id=%s",
         email, confirmed, project_request_id
     )
 
-    if not email or not confirmed or not project_request_id:
+    if not email or not confirmed:
         return {"ok": True}
 
+    # 🔍 DB QUERY (NOW TYPE-SAFE)
     stmt = select(ProjectFile).where(
         ProjectFile.project_request_id == project_request_id
     )
