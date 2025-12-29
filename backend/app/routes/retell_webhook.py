@@ -17,6 +17,7 @@ async def retell_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     print("RETELL WEBHOOK HIT")
+    
     data = await request.json()
 
     # 🔍 TEMP: RAW PAYLOAD (remove after validation)
@@ -69,3 +70,4 @@ async def retell_webhook(
         "email": email,
         "attachments": len(attachments),
     }
+raise RuntimeError("RETELL ROUTE FILE LOADED")
