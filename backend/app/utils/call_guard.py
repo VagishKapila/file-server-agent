@@ -1,15 +1,26 @@
-# backend/app/utils/call_guard.py
-
 import os
 
-TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"
-TEST_PHONE = os.getenv("TEST_PHONE", "+14084106151")  # your number
+# Comma-separated test numbers allowed to receive calls
+TEST_CALL_NUMBERS = os.getenv(
+    "TEST_CALL_NUMBERS",
+    "+14084106151"  # your phone default
+).split(",")
+
+TEST_MODE = os.getenv("CALL_TEST_MODE", "true").lower() == "true"
 
 
-def enforce_test_call(vendor_phone: str) -> str:
+def enforce_test_call(real_vendor_phone: str | None) -> str:
     """
-    During test mode, ALL calls go to test phone.
+    Enforces test-only calling.
+    - If TEST_MODE is ON → always return tester phone
+    - If OFF → return real vendor phone
     """
+
     if TEST_MODE:
-        return TEST_PHONE
-    return vendor_phone
+        # Always call first test number
+        return TEST_CALL_NUMBERS[0].strip()
+
+    if not real_vendor_phone:
+        raise ValueError("Missing vendor phone")
+
+    return real_vendor_phone
