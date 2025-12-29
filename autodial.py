@@ -10,6 +10,7 @@ BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")
 if not BACKEND_BASE_URL:
     raise RuntimeError("BACKEND_BASE_URL not set")
 
+
 @router.post("/start")
 async def autodial_start(
     project_request_id: str = Form(...),
@@ -23,25 +24,25 @@ async def autodial_start(
     Backend owns dialing + test enforcement
     """
 
+    # Validate vendors JSON early
     try:
-        vendor_list = json.loads(vendors)
+        json.loads(vendors)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid vendors JSON")
 
-    payload = {
-        "project_request_id": project_request_id,
-        "project_address": project_address,
-        "trade": trade,
-        "vendors": vendor_list,
-        "callback_phone": callback_phone,
-    }
+    logger.info("➡️ Forwarding autodial request to backend (FORM MODE)")
 
-    logger.info("➡️ Forwarding autodial request to backend")
-
+    # ⚠️ IMPORTANT: MUST BE form-data
     r = requests.post(
         f"{BACKEND_BASE_URL}/autodial/start",
-        json=payload,
-        timeout=20,
+        data={
+            "project_request_id": project_request_id,
+            "project_address": project_address,
+            "trade": trade,
+            "vendors": vendors,
+            "callback_phone": callback_phone,
+        },
+        timeout=30,
     )
 
     if r.status_code >= 400:
