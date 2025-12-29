@@ -7,7 +7,7 @@ from sqlalchemy.sql import func
 from app.db import get_db
 from app.models.project_files import ProjectFile
 from app.models.vendor_contacts import VendorContact
-from app.models.vendor_calls import VendorCall
+from app.models.vendor_call import VendorCall
 from app.services.unified_email_service import send_project_email
 
 router = APIRouter(prefix="/retell", tags=["retell"])
