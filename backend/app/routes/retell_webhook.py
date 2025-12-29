@@ -23,12 +23,9 @@ async def retell_webhook(
     data = await request.json()
     logger.info("🔥 RETELL RAW PAYLOAD: %s", data)
 
-    # ONLY process analyzed calls
-    if data.get("event") != "call_analyzed":
-        return {"ok": True}
-
     call = data.get("call", {}) or {}
 
+    # ✅ DEFENSIVE ANALYSIS EXTRACTION (RETELL-SAFE)
     analysis = (
         data.get("analysis", {}).get("custom_analysis")
         or data.get("custom_analysis")
@@ -41,21 +38,34 @@ async def retell_webhook(
     vendor_phone = call.get("to_number")
     retell_call_id = call.get("call_id")
 
-    logger.error(
-        "🔎 ANALYZED | call_id=%s phone=%s email=%s confirmed=%s analysis=%s",
+    logger.warning(
+        "🧪 RETELL PARSED | call_id=%s phone=%s email=%s confirmed=%s",
         retell_call_id,
         vendor_phone,
         email,
         confirmed,
-        analysis,
     )
 
     if not email or not confirmed or not vendor_phone:
         return {"ok": True}
 
+    # ✅ FIND MOST RECENT VENDOR CALL (SOURCE OF TRUTH)
+    res = await db.execute(
+        select(VendorCall)
+        .where(VendorCall.vendor_phone == vendor_phone)
+        .where(VendorCall.status.in_(["pending", "called"]))
+        .order_by(VendorCall.created_at.desc())
+        .limit(1)
+    )
+    vendor_call = res.scalar_one_or_none()
+
+    if not vendor_call:
+        logger.error("❌ No VendorCall found for phone=%s", vendor_phone)
+        return {"ok": True}
+
     project_request_id = vendor_call.project_request_id
 
-    # ---- VendorContact ----
+    # ✅ UPSERT VENDOR CONTACT
     res = await db.execute(
         select(VendorContact)
         .where(VendorContact.email == email)
@@ -71,7 +81,7 @@ async def retell_webhook(
         db.add(vendor_contact)
         await db.flush()
 
-    # ---- Update VendorCall ----
+    # ✅ UPDATE VENDOR CALL
     await db.execute(
         update(VendorCall)
         .where(VendorCall.id == vendor_call.id)
@@ -81,20 +91,20 @@ async def retell_webhook(
         )
     )
 
-    # ---- AUDIT (SOURCE OF TRUTH) ----
+    # ✅ AUDIT (NON-NEGOTIABLE)
     await db.execute(
         insert(retell_call_audit).values(
             retell_call_id=retell_call_id,
             to_number=vendor_phone,
             extracted_email=email,
-            email_confirmed=confirmed,
+            email_confirmed=True,
             project_request_id=project_request_id,
             vendor_call_id=vendor_call.id,
             raw_payload=data,
         )
     )
 
-    # ---- Fetch project files ----
+    # ✅ FETCH PROJECT FILES
     res = await db.execute(
         select(ProjectFile)
         .where(ProjectFile.project_request_id == project_request_id)
@@ -107,7 +117,7 @@ async def retell_webhook(
         if f.stored_path and f.stored_path.startswith("r2://")
     ]
 
-    # ---- Send email ----
+    # ✅ SEND EMAIL
     send_project_email(
         to_email=email,
         subject="Project Files",
