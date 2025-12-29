@@ -16,10 +16,13 @@ async def retell_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
+    logger.warning("🔥 RETELL WEBHOOK HIT")
+
     data = await request.json()
+    logger.warning("🔥 RETELL RAW PAYLOAD: %s", data)
+
     call = data.get("call", {})
 
-    # ✅ DEFENSIVE RETELL PARSING (DO NOT CHANGE)
     structured = (
         data.get("custom_analysis")
         or call.get("custom_analysis")
@@ -37,29 +40,22 @@ async def retell_webhook(
         logger.warning("RETELL | invalid project_request_id: %s", raw_id)
         return {"ok": True}
 
-    logger.info(
+    logger.warning(
         "RETELL PARSED | email=%s confirmed=%s project_request_id=%s",
-        email,
-        confirmed,
-        project_request_id,
+        email, confirmed, project_request_id
     )
 
     if not email or not confirmed:
         return {"ok": True}
 
-    # 🔍 FETCH PROJECT FILES
     res = await db.execute(
         select(ProjectFile)
         .where(ProjectFile.project_request_id == project_request_id)
     )
     files = res.scalars().all()
 
-    # ✅ ONLY R2 FILES (REQUIRED FOR ATTACHMENTS)
     attachments = [
-        {
-            "filename": f.filename,
-            "path": f.stored_path,
-        }
+        {"filename": f.filename, "path": f.stored_path}
         for f in files
         if f.stored_path and f.stored_path.startswith("r2://")
     ]
@@ -70,6 +66,8 @@ async def retell_webhook(
         body="Please find drawings and photos attached.",
         attachments=attachments,
     )
+
+    logger.warning("🔥 EMAIL SENT | attachments=%d", len(attachments))
 
     return {
         "status": "sent",
