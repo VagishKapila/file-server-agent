@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.db import get_db
 from app.models.project_files import ProjectFile
-from app.models.vendor_contact import VendorContact
+from app.models.vendor_contacts import VendorContact
 from app.models.vendor_call import VendorCall
 from app.services.unified_email_service import send_project_email
 
