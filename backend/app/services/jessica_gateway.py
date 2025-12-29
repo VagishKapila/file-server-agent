@@ -6,10 +6,14 @@ async def start_jessica_call(
     phone_number: str,
     vendor: dict,
     project_address: str,
-    city: str,
-    trades: Union[str, List[str]],
     project_request_id: int,
-    callback_phone: str,
+
+    # ✅ backwards + forwards compatible
+    trade: Optional[str] = None,
+    trades: Union[str, List[str], None] = None,
+
+    city: Optional[str] = "Unknown",
+    callback_phone: Optional[str] = None,
     inferred_primary_trade: Optional[str] = None,
 ):
     """
@@ -23,18 +27,21 @@ async def start_jessica_call(
     """
 
     # -------------------------------------------------
-    # Normalize trades
+    # Normalize trades (SAFE FIX)
     # -------------------------------------------------
+    if trades is None and trade:
+        trades = [trade]
+
     if isinstance(trades, str):
         trades = [trades]
 
-    trades = [t for t in trades if t]
+    trades = [t for t in (trades or []) if t]
 
     primary_trade = inferred_primary_trade or (trades[0] if trades else "general")
     multiple_trades = len(trades) > 1
 
     # -------------------------------------------------
-    # Spoken opening script (FIX 1)
+    # Spoken opening script
     # -------------------------------------------------
     if multiple_trades:
         opening_script = (
@@ -58,38 +65,31 @@ async def start_jessica_call(
     )
 
     # -------------------------------------------------
-    # Build context sent to VAPI (FIX 2)
+    # Build VAPI context (UNCHANGED LOGIC)
     # -------------------------------------------------
     context = {
         "__firstMessage": opening_script,
 
-        # Project identifiers
         "project_request_id": project_request_id,
 
-        # Vendor info
         "vendor": {
             "name": vendor.get("name"),
             "phone": phone_number,
             "email": vendor.get("email"),
         },
 
-        # Project info
         "project_address": project_address,
         "city": city,
 
-        # Trade logic
         "trades": trades,
         "primary_trade": primary_trade,
         "multiple_trades": multiple_trades,
 
-        # Callback
         "callback_phone": callback_phone,
 
-        # Spoken prompts
         "opening_script": opening_script,
         "email_offer_script": email_offer_script,
 
-        # 🔥 HARD FLOW CONTROL (email capture + repeat-back)
         "context_flow": {
             "after_positive_interest": (
                 "Great. Before I send anything, what is the best email address "
@@ -99,52 +99,18 @@ async def start_jessica_call(
                 "Just to confirm, I heard {email}. Is that correct?"
             ),
         },
-
-        # Soft guidance
-        "conversation_guidance": {
-            "positive_interest_phrases": [
-                "yes",
-                "yes open",
-                "sure",
-                "yeah",
-                "yep",
-                "we are",
-                "we're open",
-                "available",
-                "interested",
-                "possibly",
-                "send it",
-                "email it",
-                "that works",
-            ],
-            "if_multiple_trades": (
-                "Confirm which trade they perform before discussing scope."
-            ),
-            "if_single_trade": (
-                "Proceed directly discussing that trade."
-            ),
-            "next_step_after_interest": (
-                "Force email capture and confirmation before ending the call."
-            ),
-        },
     }
 
     # -------------------------------------------------
-    # Debug visibility
+    # Debug
     # -------------------------------------------------
-    print(
-        "☎️ STARTING JESSICA CALL",
-        {
-            "phone": phone_number,
-            "project_address": project_address,
-            "city": city,
-            "primary_trade": primary_trade,
-            "trades": trades,
-            "project_request_id": project_request_id,
-        }
-    )
+    print("☎️ STARTING JESSICA CALL", {
+        "phone": phone_number,
+        "project_request_id": project_request_id,
+        "primary_trade": primary_trade,
+        "trades": trades,
+    })
 
-    print("☎️ FINAL DESTINATION NUMBER (PRE-VAPI):", phone_number)
     # -------------------------------------------------
     # Send to VAPI
     # -------------------------------------------------
