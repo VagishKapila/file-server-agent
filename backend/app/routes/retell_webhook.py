@@ -24,7 +24,7 @@ async def retell_webhook(
 
     call = data.get("call", {})
 
-    # ---- Defensive parsing (KEEP) ----
+    # ---------- DEFENSIVE EMAIL PARSING (DO NOT TOUCH) ----------
     structured = (
         data.get("custom_analysis")
         or call.get("custom_analysis")
@@ -35,10 +35,13 @@ async def retell_webhook(
     email = structured.get("email")
     confirmed = structured.get("email_confirmed") is True
 
-    raw_project_id = call.get("metadata", {}).get("project_request_id")
-    vendor_call_id = call.get("metadata", {}).get("vendor_call_id")
+    metadata = call.get("metadata", {}) or {}
+
+    raw_project_id = metadata.get("project_request_id")
+    vendor_call_id = metadata.get("vendor_call_id")
+    trade = metadata.get("trade")
+
     vendor_phone = call.get("to_number")
-    trade = call.get("metadata", {}).get("trade")
 
     try:
         project_request_id = int(raw_project_id)
@@ -47,17 +50,18 @@ async def retell_webhook(
         return {"ok": True}
 
     logger.info(
-        "RETELL PARSED | email=%s confirmed=%s project_request_id=%s vendor_call_id=%s",
+        "RETELL PARSED | email=%s confirmed=%s project_request_id=%s vendor_call_id=%s trade=%s",
         email,
         confirmed,
         project_request_id,
         vendor_call_id,
+        trade,
     )
 
     if not email or not confirmed:
         return {"ok": True}
 
-    # ---- Save / get VendorContact ----
+    # ---------- SAVE / GET VENDOR CONTACT ----------
     res = await db.execute(
         select(VendorContact)
         .where(VendorContact.email == email)
@@ -71,9 +75,9 @@ async def retell_webhook(
             vendor_phone=vendor_phone,
         )
         db.add(vendor_contact)
-        await db.flush()  # get ID without commit
+        await db.flush()  # ensures vendor_contact.id exists
 
-    # ---- Link VendorCall (NEW PART) ----
+    # ---------- LINK VENDOR CALL ----------
     if vendor_call_id:
         await db.execute(
             update(VendorCall)
@@ -84,7 +88,7 @@ async def retell_webhook(
             )
         )
 
-    # ---- Fetch project files ----
+    # ---------- FETCH PROJECT FILES ----------
     res = await db.execute(
         select(ProjectFile)
         .where(ProjectFile.project_request_id == project_request_id)
@@ -92,12 +96,15 @@ async def retell_webhook(
     files = res.scalars().all()
 
     attachments = [
-        {"filename": f.filename, "path": f.stored_path}
+        {
+            "filename": f.filename,
+            "path": f.stored_path,
+        }
         for f in files
         if f.stored_path and f.stored_path.startswith("r2://")
     ]
 
-    # ---- Send email ----
+    # ---------- SEND EMAIL ----------
     send_project_email(
         to_email=email,
         subject="Project Files",
