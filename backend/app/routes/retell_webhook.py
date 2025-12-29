@@ -25,6 +25,14 @@ async def retell_webhook(
     confirmed = structured.get("email_confirmed") is True
     project_request_id = call.get("metadata", {}).get("project_request_id")
 
+    logger.info(
+        "RETELL PARSED | email=%s confirmed=%s project_request_id=%s raw=%s",
+        email,
+        confirmed,
+        project_request_id,
+        structured
+    )
+
     if not email or not confirmed or not project_request_id:
         return {"ok": True}
 
