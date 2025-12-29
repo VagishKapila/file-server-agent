@@ -16,7 +16,6 @@ async def retell_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    print("RETELL WEBHOOK HIT")
     
     data = await request.json()
 
