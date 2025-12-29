@@ -1,94 +1,70 @@
-from fastapi import APIRouter, Form, HTTPException
-import json
+from fastapi import FastAPI, Request, HTTPException
+from dotenv import load_dotenv
 import os
 import logging
 import requests
+from fastapi.middleware.cors import CORSMiddleware
 
-router = APIRouter(prefix="/autodial", tags=["autodial"])
-logger = logging.getLogger("autodial")
+from autodial import router as autodial_router
 
 # ---------------- ENV ----------------
-RETELL_API_KEY = os.getenv("RETELL_API_KEY")
-RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
-RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
+load_dotenv()
 
-# 🔒 HARD TEST LOCK (YOU)
-TEST_PHONE_NUMBER = os.getenv("TEST_PHONE_NUMBER", "+14084106151")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("railway-webhook")
 
-RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
+# 🔥 THIS IS WHAT RAILWAY NEEDS
+app = FastAPI(title="Railway Webhook Relay")
 
+# ---------------- ROUTERS ----------------
+app.include_router(autodial_router)
 
-@router.post("/test")
-async def autodial_test(
-    vendors: str = Form(...),
-):
-    """
-    🔒 RETELL TEST MODE (FILE-SERVER)
-    - Accepts vendor list
-    - ALWAYS calls TEST_PHONE_NUMBER
-    - Preserves real vendor phone in metadata
-    """
+# ---------------- MIDDLEWARE ----------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
-        raise HTTPException(status_code=500, detail="Missing Retell env vars")
+# ---------------- HEALTH ----------------
+@app.get("/")
+def root():
+    return {"status": "railway autodial running"}
 
-    try:
-        vendor_list = json.loads(vendors)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid vendors JSON")
+@app.get("/health")
+def health():
+    return {"ok": True}
 
-    if not vendor_list:
-        raise HTTPException(status_code=400, detail="No vendors provided")
-
-    vendor = vendor_list[0]
-
-    vendor_phone = vendor.get("phone")
-    if not vendor_phone:
-        raise HTTPException(status_code=400, detail="Vendor missing phone")
-
-    # 🔒 FORCE CALL TO YOU ONLY
-    dialed_phone = TEST_PHONE_NUMBER
-
-    payload = {
-        "override_agent_id": RETELL_AGENT_ID,
-        "from_number": RETELL_PHONE_NUMBER,
-        "to_number": dialed_phone,
-        "metadata": {
-            "mode": "test",
-            "source": "railway-file-server",
-            "original_vendor_phone": vendor_phone,
-            "tester_phone": dialed_phone,
-        },
-    }
-
-    logger.warning("📞 RETELL TEST CALL INITIATED")
-    logger.warning(f"📞 DIALING (LOCKED): {dialed_phone}")
-    logger.warning(f"📞 REAL_VENDOR_PHONE: {vendor_phone}")
-    logger.warning(f"📞 PAYLOAD: {payload}")
-
-    try:
-        res = requests.post(
-            RETELL_CALL_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {RETELL_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
-    except Exception as e:
-        logger.exception("❌ Retell request failed")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    logger.warning(f"📞 RETELL STATUS: {res.status_code}")
-    logger.warning(f"📞 RETELL RESPONSE: {res.text}")
-
-    res.raise_for_status()
-
+@app.get("/__env_check")
+def env_check():
     return {
-        "status": "called",
-        "mode": "test",
-        "dialed_phone": dialed_phone,
-        "real_vendor_phone": vendor_phone,
-        "retell_response": res.json(),
+        "RETELL_API_KEY": bool(os.getenv("RETELL_API_KEY")),
+        "RETELL_AGENT_ID": bool(os.getenv("RETELL_AGENT_ID")),
+        "RETELL_PHONE_NUMBER": bool(os.getenv("RETELL_PHONE_NUMBER")),
+        "BACKEND_BASE_URL": os.getenv("BACKEND_BASE_URL"),
     }
+
+# ---------------- RETELL WEBHOOK PROXY ----------------
+@app.post("/retell/webhook")
+async def retell_webhook_proxy(request: Request):
+    payload = await request.json()
+
+    backend_url = os.getenv("BACKEND_BASE_URL")
+    if not backend_url:
+        raise HTTPException(status_code=500, detail="BACKEND_BASE_URL not set")
+
+    logger.info("➡️ Forwarding Retell webhook to backend")
+
+    r = requests.post(
+        f"{backend_url}/retell/webhook",
+        json=payload,
+        timeout=10,
+    )
+
+    if r.status_code >= 400:
+        logger.error("❌ Backend webhook failed: %s", r.text)
+        raise HTTPException(status_code=500, detail="Backend webhook failed")
+
+    return {"ok": True}
