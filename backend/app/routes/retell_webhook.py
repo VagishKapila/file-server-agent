@@ -36,6 +36,13 @@ async def retell_webhook(
     email = structured.get("email")
     confirmed = structured.get("email_confirmed") is True
 
+    logger.info(
+        "RETELL EXTRACTED | email=%s confirmed=%s structured=%s",
+        email,
+        confirmed,
+        structured,
+    )
+
     metadata = call.get("metadata", {}) or {}
 
     raw_project_id = metadata.get("project_request_id")
