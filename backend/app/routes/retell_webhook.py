@@ -18,10 +18,6 @@ async def retell_webhook(
 ):
     
     data = await request.json()
-
-    # 🔍 TEMP: RAW PAYLOAD (remove after validation)
-    logger.info("RETELL RAW PAYLOAD = %s", data)
-
     call = data.get("call", {})
 
     # ✅ FINAL, DEFENSIVE PARSING LOGIC (KEEP THIS)

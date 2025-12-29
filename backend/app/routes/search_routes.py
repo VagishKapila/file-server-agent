@@ -8,6 +8,7 @@ from ..db import get_db
 from ..models.activity_log import ActivityLog
 from ..models.search_result import SearchResult
 from .activity import log_activity
+from app.utils.vendor_guard import clean_vendor_result
 
 router = APIRouter()
 
@@ -21,7 +22,7 @@ class SearchRequest(BaseModel):
     tags: list[str] = []
     address: str | None = None
     notes: str | None = None
-    email: str | None = None   # ✅ ADD THIS
+    email: str | None = None
 
 
 # =========================
@@ -33,15 +34,14 @@ async def perform_search(
     db: AsyncSession = Depends(get_db),
 ):
     # =========================
-    # 0) HARD GUARANTEE: Project exists (NO ORM IMPORT)
+    # 0) HARD GUARANTEE: Project exists
     # =========================
     result = await db.execute(
         text("SELECT id FROM project_requests WHERE id = :id"),
         {"id": data.project_request_id},
     )
-    project_row = result.first()
 
-    if not project_row:
+    if not result.first():
         await db.execute(
             text("""
                 INSERT INTO project_requests (id, project_name, location, request_type)
@@ -54,7 +54,7 @@ async def perform_search(
                 "type": "subs",
             },
         )
-        await db.flush()  # FK safety
+        await db.flush()
 
     # =========================
     # 1) Normalize trades
@@ -72,7 +72,7 @@ async def perform_search(
         trades = ["General Contractor"]
 
     # =========================
-    # 2) Run Google search (phones REQUIRED)
+    # 2) Run search
     # =========================
     results = await search_subcontractors(
         trades=trades,
@@ -82,22 +82,26 @@ async def perform_search(
     )
 
     # =========================
-    # 3) Persist results (phones are the product)
+    # 3) Persist CLEAN results only
     # =========================
+    cleaned_count = 0
+
     for r in results:
-        if not r.get("phone"):
-            continue  # irrelevant without phone
+        cleaned = clean_vendor_result(r)
+        if not cleaned:
+            continue
 
         db.add(
             SearchResult(
                 project_request_id=data.project_request_id,
-                vendor_name=r.get("name"),
-                trade=r.get("trade") or trades[0],
-                phone=r.get("phone"),
-                email=r.get("email"),
-                source=r.get("source", "google"),
+                vendor_name=cleaned["name"],
+                trade=cleaned["trade"] or trades[0],
+                phone=cleaned["phone"],        # ALWAYS E.164 now
+                email=cleaned.get("email"),
+                source=cleaned.get("source", "google"),
             )
         )
+        cleaned_count += 1
 
     # =========================
     # 4) Activity log
@@ -110,13 +114,14 @@ async def perform_search(
             payload={
                 "trade": trades,
                 "address": data.address,
-                "results_count": len(results),
+                "raw_results": len(results),
+                "saved_results": cleaned_count,
             },
         )
     )
 
     # =========================
-    # 5) Commit ONCE (atomic)
+    # 5) Commit ONCE
     # =========================
     await db.commit()
 
@@ -130,14 +135,14 @@ async def perform_search(
             "action": "contractor_search",
             "payload": {
                 "trade": trades,
-                "results_count": len(results),
+                "saved_results": cleaned_count,
             },
         },
         db,
     )
 
     # =========================
-    # 7) Optional client email (reuse existing route)
+    # 7) Optional client email
     # =========================
     if data.email:
         from app.routes.client_email import (
@@ -156,7 +161,6 @@ async def perform_search(
     return {
         "status": "ok",
         "project_request_id": data.project_request_id,
-        "results": results,
+        "raw_results": len(results),
+        "saved_results": cleaned_count,
     }
-
-    
