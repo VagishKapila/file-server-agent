@@ -26,7 +26,8 @@ async def retell_webhook(
 
     # ---------- DEFENSIVE EMAIL PARSING (DO NOT TOUCH) ----------
     structured = (
-        data.get("custom_analysis")
+        data.get("analysis", {}).get("custom_analysis")  # 🔥 REQUIRED FOR REAL CALLS
+        or data.get("custom_analysis")
         or call.get("custom_analysis")
         or call.get("call_analysis", {}).get("custom_analysis_data")
         or {}
