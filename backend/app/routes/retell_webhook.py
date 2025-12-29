@@ -70,4 +70,3 @@ async def retell_webhook(
         "email": email,
         "attachments": len(attachments),
     }
-raise RuntimeError("RETELL ROUTE FILE LOADED")
