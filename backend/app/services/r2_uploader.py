@@ -34,10 +34,8 @@ def upload_file_to_r2(
         raise ValueError("No data provided for R2 upload")
 
     R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
-    R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")
-
-    if not all([R2_BUCKET_NAME, R2_PUBLIC_BASE]):
-        raise RuntimeError("Missing R2 bucket config")
+    if not R2_BUCKET_NAME:
+        raise RuntimeError("Missing R2 bucket name")
 
     s3 = _get_r2_client()
 
@@ -48,4 +46,5 @@ def upload_file_to_r2(
         ContentType=content_type,
     )
 
-    return f"{R2_PUBLIC_BASE}/{r2_key}"
+    # 🔑 Always return canonical R2 URI (NO public URL)
+    return f"r2://{R2_BUCKET_NAME}/{r2_key}"
