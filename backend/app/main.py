@@ -14,7 +14,6 @@ from app.routes.auth import router as auth_router
 from app.routes.auth_google import router as auth_google_router
 from app.routes.browser_email import router as browser_email_router
 from app.routes.retell_webhook import router as retell_webhook_router
-from app.models.autodial import router as autodial_vapi_router
 
 
 from app.routes import (
@@ -86,6 +85,7 @@ app.include_router(sub_calls_router, prefix="/sub-calls")
 app.include_router(search_router, prefix="/api")
 app.include_router(project_search_router)
 
+app.include_router(autodial.router)
 app.include_router(activity.router, prefix="/activity")
 
 app.include_router(material_requests.router, prefix="/material-requests")
@@ -107,8 +107,6 @@ app.include_router(admin_beta_router)
 
 app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
-app.include_router(autodial_vapi_router)
-app.include_router(autodial.router)   # exposes /autodial/test (and /autodial/start if present)
 
 print("🔥 RUNNING app.main 🔥")
 

@@ -5,115 +5,91 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db import get_db
-from app.models.email_log import EmailLog
+from app.models.vendor_call import VendorCall
 from app.models.call_attachments import CallAttachments
 
-router = APIRouter(prefix="/negotiator", tags=["negotiator"])
-logger = logging.getLogger("negotiator")
+router = APIRouter(prefix="/retell", tags=["retell"])
+logger = logging.getLogger("retell-webhook")
 
 
 @router.post("/webhook")
-async def negotiator_webhook(
+async def retell_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    data = await request.json()
+    payload = await request.json()
 
-    call = data.get("call") or data.get("message", {}).get("call") or {}
+    # --------------------------------------------------
+    # BASIC CALL DATA
+    # --------------------------------------------------
+    call = payload.get("call") or payload.get("message", {}).get("call") or {}
     call_id = call.get("id")
-    ended_reason = call.get("endedReason")
 
-    if not call_id or not ended_reason:
+    if not call_id:
         return {"ok": True}
 
-    # --------------------------------------------------
-    # AI OUTPUT
-    # --------------------------------------------------
-    analysis = call.get("call_analysis") or {}
-    custom = analysis.get("custom_analysis_data") or {}
+    metadata = call.get("metadata") or {}
 
-    email = custom.get("email")
-    email_confirmed = bool(
-        custom.get("email_confirmed")
-        or custom.get("Email Confirmed")
-    )
-    interest = custom.get("interest")
+    vendor_call_ref = metadata.get("vendor_call_ref")
+    attachment_ids = metadata.get("attachment_ids", [])
 
-    if not (email and email_confirmed and interest in ("yes", "maybe")):
-        return {"ok": True}
-
-    normalized_email = email.strip().lower()
-
-    # --------------------------------------------------
-    # PREVENT DUPLICATE SENDS
-    # --------------------------------------------------
-    existing = await db.execute(
-        select(EmailLog).where(
-            EmailLog.related_call_id == call_id,
-            EmailLog.email_type == "retell_vendor",
-        )
-    )
-    if existing.scalar_one_or_none():
-        logger.warning("⚠️ Email already sent | call_id=%s", call_id)
-        return {"ok": True}
-
-    # --------------------------------------------------
-    # RESOLVE ATTACHMENT IDS (INTS ONLY)
-    # --------------------------------------------------
-    attachment_ids = call.get("metadata", {}).get("attachment_ids", [])
-
+    # Normalize attachments
     if isinstance(attachment_ids, list):
         attachment_ids = [x for x in attachment_ids if isinstance(x, int)]
     else:
         attachment_ids = []
 
-    # Fallback to DB mapping
-    if not attachment_ids:
-        row = await db.execute(
-            select(CallAttachments).where(CallAttachments.call_id == call_id)
-        )
-        record = row.scalar_one_or_none()
-        if record and isinstance(record.attachments, list):
-            attachment_ids = [
-                x for x in record.attachments if isinstance(x, int)
-            ]
-
-    if not attachment_ids:
-        logger.error("❌ No valid attachment IDs | call_id=%s", call_id)
-        return {"ok": True}
-
     # --------------------------------------------------
-    # SEND VIA SUBCONTRACTOR EMAIL PIPELINE
+    # CREATE VENDOR CALL (ONCE)
     # --------------------------------------------------
-    from app.routes.subcontractor_email import send_vendor_email
+    if vendor_call_ref:
+        try:
+            project_request_id, vendor_phone = vendor_call_ref.split(":", 1)
+            project_request_id = int(project_request_id)
+        except Exception:
+            logger.error("❌ Invalid vendor_call_ref | %s", vendor_call_ref)
+            project_request_id = None
+            vendor_phone = None
 
-    await send_vendor_email(
-        payload={
-            "vendor_email": normalized_email,
-            "attachments": attachment_ids,
-            "subject": "Project Drawings – BAINS Development",
-            "message": "As discussed on the call, attached are the project files.",
-        },
-        db=db,
-    )
+        if project_request_id and vendor_phone:
+            existing = await db.execute(
+                select(VendorCall).where(
+                    VendorCall.retell_call_id == call_id
+                )
+            )
+            if not existing.scalar_one_or_none():
+                vendor_call = VendorCall(
+                    project_request_id=project_request_id,
+                    vendor_phone=vendor_phone,
+                    retell_call_id=call_id,
+                    status="completed",
+                )
+                db.add(vendor_call)
+                await db.flush()
 
-    # --------------------------------------------------
-    # LOG EMAIL
-    # --------------------------------------------------
-    db.add(
-        EmailLog(
-            project_request_id=None,
-            recipient_email=normalized_email,
-            email_type="retell_vendor",
-            related_call_id=call_id,
-        )
-    )
-    await db.commit()
+                logger.info(
+                    "✅ VendorCall created | call_id=%s project=%s vendor=%s",
+                    call_id,
+                    project_request_id,
+                    vendor_phone,
+                )
 
-    logger.info(
-        "✅ Vendor email sent | call_id=%s | attachments=%d",
-        call_id,
-        len(attachment_ids),
-    )
+                # --------------------------------------------------
+                # SAVE ATTACHMENTS (CRITICAL FIX)
+                # --------------------------------------------------
+                if attachment_ids:
+                    db.add(
+                        CallAttachments(
+                            call_id=call_id,
+                            attachments=attachment_ids,
+                        )
+                    )
+                    logger.info(
+                        "📎 Attachments linked | call_id=%s count=%d",
+                        call_id,
+                        len(attachment_ids),
+                    )
+
+                await db.commit()
 
     return {"ok": True}

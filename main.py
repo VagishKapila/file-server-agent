@@ -2,10 +2,11 @@ from fastapi import FastAPI, Request, HTTPException
 from dotenv import load_dotenv
 import os
 import logging
-import requests
+import requests   # ✅ REQUIRED
 from fastapi.middleware.cors import CORSMiddleware
 
 from autodial import router as autodial_router
+
 
 load_dotenv()
 
@@ -14,8 +15,10 @@ logger = logging.getLogger("railway-webhook")
 
 app = FastAPI(title="Railway Webhook Relay")
 
+# ---------------- ROUTERS ----------------
 app.include_router(autodial_router)
 
+# ---------------- MIDDLEWARE ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------- HEALTH ----------------
 @app.get("/")
 def root():
     return {"status": "railway autodial running"}
@@ -38,10 +42,10 @@ def env_check():
         "RETELL_API_KEY": bool(os.getenv("RETELL_API_KEY")),
         "RETELL_AGENT_ID": bool(os.getenv("RETELL_AGENT_ID")),
         "RETELL_PHONE_NUMBER": bool(os.getenv("RETELL_PHONE_NUMBER")),
-        "TEST_PHONE_NUMBER": bool(os.getenv("TEST_PHONE_NUMBER")),
         "BACKEND_BASE_URL": os.getenv("BACKEND_BASE_URL"),
     }
 
+# ---------------- RETELL WEBHOOK PROXY ----------------
 @app.post("/retell/webhook")
 async def retell_webhook_proxy(request: Request):
     payload = await request.json()
