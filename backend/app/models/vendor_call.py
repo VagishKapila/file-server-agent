@@ -8,17 +8,29 @@ class VendorCall(Base):
 
     id = Column(Integer, primary_key=True)
 
+    # -----------------------------
+    # CORE RELATION FIELDS
+    # -----------------------------
     project_request_id = Column(Integer, index=True)
     trade = Column(String, index=True)
 
     vendor_id = Column(String, index=True)
     vendor_name = Column(String)
-    vendor_phone = Column(String)
+    vendor_phone = Column(String, index=True)
 
+    # -----------------------------
+    # RETELL LINK (CRITICAL FIX)
+    # -----------------------------
+    # This MUST exist because the DB already has it
+    retell_call_id = Column(String, index=True)
+
+    # -----------------------------
+    # STATUS / FLAGS
+    # -----------------------------
     is_preferred = Column(Boolean, default=False)
 
+    # pending | called | confirmed | declined | no_answer | failed | completed
     status = Column(String, default="pending")
-    # pending | called | confirmed | declined | no_answer | failed
 
     confirmed_at = Column(DateTime, nullable=True)
 

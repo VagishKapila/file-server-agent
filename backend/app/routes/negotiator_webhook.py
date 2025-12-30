@@ -136,6 +136,18 @@ async def retell_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     payload = await request.json()
+    # --------------------------------------------------
+    # EVENT GUARD — DO NOT PROCESS EARLY EVENTS
+    # --------------------------------------------------
+    event_type = payload.get("event")
+
+    if event_type not in {"call_analyzed", "call_ended"}:
+        logger.info(
+            "⏭️ Ignoring Retell event | event=%s call_id=%s",
+            event_type,
+            payload.get("call", {}).get("call_id"),
+        )
+        return {"ok": True}
 
     # --------------------------------------------------
     # DEBUG: RAW PAYLOAD (KEEP)
@@ -194,26 +206,20 @@ async def retell_webhook(
     )
 
     # --------------------------------------------------
-    # Resolve VendorCall (preferred: vendor_call_id)
+    # Resolve VendorCall (SOURCE OF TRUTH: vendor_call_ref)
     # --------------------------------------------------
     vendor_call: Optional[VendorCall] = None
     resolution_path = None
 
-    if vendor_call_id is not None:
-        vendor_call = await _load_vendor_call_by_id(db, vendor_call_id)
-        resolution_path = "vendor_call_id"
-        if not vendor_call:
-            logger.error(
-                "❌ VendorCall not found by vendor_call_id | vendor_call_id=%s call_id=%s",
-                vendor_call_id,
-                call_id,
-            )
-
-    if not vendor_call and vendor_call_ref:
+    # 1️⃣ vendor_call_ref (PRIMARY — proven to work)
+    if vendor_call_ref:
         ref_project_id, ref_phone = _parse_vendor_call_ref(vendor_call_ref)
         if ref_project_id and ref_phone:
-            vendor_call = await _load_vendor_call_by_project_phone(db, ref_project_id, ref_phone)
+            vendor_call = await _load_vendor_call_by_project_phone(
+                db, ref_project_id, ref_phone
+            )
             resolution_path = "vendor_call_ref"
+
         logger.warning(
             "🔎 vendor_call_ref lookup | call_id=%s ref_project_id=%s ref_phone=%s found=%s",
             call_id,
@@ -222,34 +228,24 @@ async def retell_webhook(
             bool(vendor_call),
         )
 
+    # 2️⃣ project_request_id + vendor_phone
     if not vendor_call and project_request_id and vendor_phone_norm:
-        vendor_call = await _load_vendor_call_by_project_phone(db, project_request_id, vendor_phone_norm)
-        resolution_path = "project_request_id+vendor_phone"
-        logger.warning(
-            "🔎 project+phone lookup | call_id=%s project_request_id=%s vendor_phone_norm=%s found=%s",
-            call_id,
-            project_request_id,
-            vendor_phone_norm,
-            bool(vendor_call),
+        vendor_call = await _load_vendor_call_by_project_phone(
+            db, project_request_id, vendor_phone_norm
         )
+        resolution_path = "project_request_id+vendor_phone"
 
+    # 3️⃣ retell_call_id (secondary)
     if not vendor_call:
         vendor_call = await _load_vendor_call_by_retell_call_id(db, call_id)
         if vendor_call:
             resolution_path = "retell_call_id"
-            logger.warning("🔎 retell_call_id lookup hit | call_id=%s vendor_call_id=%s", call_id, vendor_call.id)
 
+    # 4️⃣ last-resort phone only
     if not vendor_call and vendor_phone_norm:
         vendor_call = await _load_most_recent_by_phone(db, vendor_phone_norm)
         if vendor_call:
             resolution_path = "most_recent_by_phone"
-            logger.error(
-                "⚠️ LAST RESORT MATCH by phone only | call_id=%s matched_vendor_call_id=%s matched_project_request_id=%s vendor_phone_norm=%s",
-                call_id,
-                vendor_call.id,
-                vendor_call.project_request_id,
-                vendor_phone_norm,
-            )
 
     # --------------------------------------------------
     # If still missing, create placeholder (so email does not get dropped)
@@ -412,4 +408,4 @@ async def retell_webhook(
         len(attachment_ids),
     )
 
-    return {"ok": True}
+    return {"ok": True}payload = await request.json()
