@@ -1,85 +1,127 @@
-from fastapi import APIRouter, Form, HTTPException
-import json, os, requests, logging
+from fastapi import APIRouter, Form, Depends
+from typing import List, Dict, Any
+import json
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import get_db
+from app.models.vendor_call import VendorCall
+from app.models.activity_log import ActivityLog
+from app.services.resolve_dial import resolve_dial_number
+from app.services.call_engine import start_retell_call  # ✅ RETELL ONLY
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/autodial", tags=["autodial"])
-logger = logging.getLogger("autodial")
-
-RETELL_API_KEY = os.getenv("RETELL_API_KEY")
-RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
-RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
-
-RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
 
 
 @router.post("/start")
 async def autodial_start(
-    vendors: str = Form(...),
-    retell_metadata: str = Form(None),  # 🔑 CRITICAL
+    project_request_id: int = Form(...),
+    project_address: str = Form(...),
+    trade: str = Form(...),
+    max_confirmed: int = Form(...),
+    vendors: str = Form(...),  # JSON list
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    🔥 Railway isolation test
-    Preserves FULL metadata chain so VendorCall + Retail + attachments work
+    Autodial entrypoint (RETELL ONLY)
     """
 
-    if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
-        raise HTTPException(status_code=500, detail="Missing Retell env")
-
-    # ----------------------------
-    # Parse vendors
-    # ----------------------------
     try:
-        vendor_list = json.loads(vendors)
+        vendor_list: List[Dict[str, Any]] = json.loads(vendors)
+        if not isinstance(vendor_list, list):
+            raise ValueError
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid vendors JSON")
+        return {"error": "Invalid vendors payload"}
 
-    if not vendor_list:
-        raise HTTPException(status_code=400, detail="No vendors provided")
+    calls_made = 0
+    calls_log = []
 
-    phone = vendor_list[0].get("phone_e164")
-    if not phone:
-        raise HTTPException(status_code=400, detail="Vendor missing phone_e164")
+    for vendor in vendor_list:
+        if calls_made >= max_confirmed:
+            break
 
-    # ----------------------------
-    # 🔑 PARSE RETELL METADATA (DO NOT OVERRIDE)
-    # ----------------------------
-    try:
-        metadata = json.loads(retell_metadata) if retell_metadata else {}
-    except Exception:
-        logger.exception("❌ Failed to parse retell_metadata")
-        metadata = {}
+        phone = vendor.get("phone") or vendor.get("phone_e164")
+        name = vendor.get("name")
 
-    # Always tag source, but NEVER replace metadata
-    metadata.setdefault("source", "frontend-autodial")
+        if not phone:
+            continue
 
-    # ----------------------------
-    # Build Retell payload
-    # ----------------------------
-    payload = {
-        "override_agent_id": RETELL_AGENT_ID,
-        "from_number": RETELL_PHONE_NUMBER,
-        "to_number": phone,
-        "metadata": metadata,  # ✅ FULL CHAIN PRESERVED
-    }
+        # ----------------------------------------
+        # 🔒 CREATE VendorCall FIRST (CRITICAL)
+        # ----------------------------------------
+        vendor_call = VendorCall(
+            project_request_id=project_request_id,
+            trade=trade,
+            vendor_name=name,
+            vendor_phone=phone,
+            status="called",
+        )
+        db.add(vendor_call)
+        await db.flush()  # ensures vendor_call.id exists
 
-    logger.warning(f"📞 CALLING {phone}")
-    logger.warning(f"📞 PAYLOAD {payload}")
+        try:
+            dial_number = await resolve_dial_number(
+                real_number=phone,
+                db=db,
+            )
 
-    res = requests.post(
-        RETELL_CALL_ENDPOINT,
-        headers={
-            "Authorization": f"Bearer {RETELL_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=30,
-    )
+            # ----------------------------------------
+            # 🔒 START RETELL CALL (NO JESSICA)
+            # ----------------------------------------
+            retell_response = await start_retell_call(
+                phone_number=dial_number,
+                metadata={
+                    "project_request_id": project_request_id,
+                    "vendor_call_id": vendor_call.id,  # 🔑 invariant
+                },
+            )
 
-    logger.warning(f"📞 RETELL STATUS {res.status_code}")
-    logger.warning(f"📞 RETELL BODY {res.text}")
+            vendor_call.retell_call_id = retell_response.get("call_id")
+            await db.commit()
 
-    res.raise_for_status()
+            calls_made += 1
+
+            db.add(
+                ActivityLog(
+                    user_id="system",
+                    project_id=str(project_request_id),
+                    action="retell_call_started",
+                    payload={
+                        "vendor_call_id": vendor_call.id,
+                        "vendor": name,
+                        "phone": phone,
+                        "retell_call_id": vendor_call.retell_call_id,
+                    },
+                )
+            )
+            await db.commit()
+
+            calls_log.append(
+                {
+                    "vendor": name,
+                    "status": "called",
+                    "vendor_call_id": vendor_call.id,
+                }
+            )
+
+        except Exception as e:
+            vendor_call.status = "failed"
+            await db.commit()
+
+            calls_log.append(
+                {
+                    "vendor": name,
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
 
     return {
-        "status": "called",
-        "retell_response": res.json(),
+        "status": "ok",
+        "project_request_id": project_request_id,
+        "calls_made": calls_made,
+        "calls_log": calls_log,
     }
