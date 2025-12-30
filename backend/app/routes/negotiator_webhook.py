@@ -29,7 +29,7 @@ async def retell_webhook(
     # BASIC CALL DATA
     # --------------------------------------------------
     call = payload.get("call") or payload.get("message", {}).get("call") or {}
-    call_id = call.get("id")
+    call_id = call.get("id") or call.get("call_id")
     ended_reason = call.get("endedReason")
 
     if not call_id:
