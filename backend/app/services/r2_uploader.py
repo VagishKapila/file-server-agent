@@ -1,7 +1,10 @@
+# backend/app/services/r2_uploader.py
+
 import os
 import boto3
 from botocore.client import Config
 from typing import Optional
+
 
 def _get_r2_client():
     R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
@@ -22,28 +25,34 @@ def _get_r2_client():
         region_name="auto",
     )
 
+
 def upload_file_to_r2(
     *,
-    local_path: str,
     r2_key: str,
-    content_type: Optional[str] = "application/pdf",
+    data: bytes,
+    content_type: Optional[str] = "application/octet-stream",
 ) -> str:
-    if not os.path.exists(local_path):
-        raise FileNotFoundError(local_path)
+    """
+    Upload raw bytes directly to Cloudflare R2.
+    Returns PUBLIC URL.
+    """
+
+    if not data:
+        raise ValueError("No data provided for R2 upload")
 
     R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
     R2_PUBLIC_BASE = os.getenv("R2_PUBLIC_BASE")
 
     if not all([R2_BUCKET_NAME, R2_PUBLIC_BASE]):
-        raise RuntimeError("Missing R2 bucket config")
+        raise RuntimeError("Missing R2 bucket configuration")
 
     s3 = _get_r2_client()
 
-    s3.upload_file(
-        Filename=local_path,
+    s3.put_object(
         Bucket=R2_BUCKET_NAME,
         Key=r2_key,
-        ExtraArgs={"ContentType": content_type},
+        Body=data,
+        ContentType=content_type,
     )
 
     return f"{R2_PUBLIC_BASE}/{r2_key}"
