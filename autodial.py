@@ -8,29 +8,17 @@ logger = logging.getLogger("autodial")
 RETELL_API_KEY = os.getenv("RETELL_API_KEY")
 RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
 RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
-TEST_PHONE_NUMBER = os.getenv("TEST_PHONE_NUMBER")  # <- your number in Railway vars
+TEST_PHONE_NUMBER = os.getenv("TEST_PHONE_NUMBER")
+
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL")  # e.g. https://backendaivagi-production.up.railway.app
 
 RETELL_CALL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
 
 
 def _enforce_test_number(vendor_phone: str) -> str:
-    """
-    Hard lock to TEST_PHONE_NUMBER if set.
-    If not set, fall back to vendor phone (still works, but not recommended for prod).
-    """
     if TEST_PHONE_NUMBER and TEST_PHONE_NUMBER.strip():
         return TEST_PHONE_NUMBER.strip()
     return vendor_phone
-
-
-@router.get("/_retell_check")
-def retell_check():
-    return {
-        "RETELL_API_KEY": bool(RETELL_API_KEY),
-        "RETELL_AGENT_ID": bool(RETELL_AGENT_ID),
-        "RETELL_PHONE_NUMBER": bool(RETELL_PHONE_NUMBER),
-        "TEST_PHONE_NUMBER": bool(TEST_PHONE_NUMBER),
-    }
 
 
 @router.post("/start")
@@ -39,25 +27,36 @@ async def autodial_start(
     project_address: str = Form(...),
     trade: str = Form(...),
     callback_phone: str = Form(...),
-    vendors: str = Form(...),  # JSON string list
-    attachments: str = Form("[]"),  # keep for compatibility (links/ids)
+    vendors: str = Form(...),
+    attachments: str = Form("[]"),
 ):
     """
-    ✅ RETELL DIALER (FILE-SERVER)
-    - Accepts browser form-data
-    - Forces calls to TEST_PHONE_NUMBER (your phone) if set
-    - Puts everything needed into metadata for backend /retell/webhook
+    CANONICAL RETELL AUTODIAL (Option A1)
+    - Creates VendorCall via backend
+    - Injects vendor_call_id into Retell metadata
     """
 
-    if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
-        raise HTTPException(status_code=500, detail="Missing Retell env vars on file-server")
+    if not all([RETELL_API_KEY, RETELL_AGENT_ID, RETELL_PHONE_NUMBER, BACKEND_BASE_URL]):
+        raise HTTPException(status_code=500, detail="Missing required environment variables")
 
+    # -------------------------
+    # Parse vendors
+    # -------------------------
     try:
         vendor_list = json.loads(vendors)
-        if not isinstance(vendor_list, list) or not vendor_list:
+        if not vendor_list:
             raise ValueError
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid vendors JSON")
+
+    vendor = vendor_list[0]
+    vendor_phone = vendor.get("phone") or vendor.get("phone_number")
+    vendor_name = vendor.get("name")
+
+    if not vendor_phone:
+        raise HTTPException(status_code=400, detail="Vendor missing phone")
+
+    dialed_phone = _enforce_test_number(vendor_phone)
 
     try:
         att_list = json.loads(attachments)
@@ -66,39 +65,58 @@ async def autodial_start(
     except Exception:
         att_list = []
 
-    vendor = vendor_list[0]
-    vendor_phone = vendor.get("phone") or vendor.get("phone_number")
-    if not vendor_phone:
-        raise HTTPException(status_code=400, detail="Vendor missing phone")
+    # -------------------------
+    # STEP 1: CREATE VENDOR CALL (BACKEND)
+    # -------------------------
+    vc_res = requests.post(
+        f"{BACKEND_BASE_URL}/vendor-calls/create",
+        json={
+            "project_request_id": project_request_id,
+            "trade": trade,
+            "vendor_name": vendor_name,
+            "vendor_phone": vendor_phone,
+            "status": "called",
+        },
+        timeout=20,
+    )
 
-    dialed_phone = _enforce_test_number(vendor_phone)
+    if vc_res.status_code != 200:
+        logger.error("❌ VendorCall create failed: %s", vc_res.text)
+        raise HTTPException(status_code=500, detail="Failed to create VendorCall")
 
+    vendor_call_id = vc_res.json().get("vendor_call_id")
+
+    if not vendor_call_id:
+        raise HTTPException(status_code=500, detail="vendor_call_id missing from backend")
+
+    logger.info("✅ VendorCall created | id=%s", vendor_call_id)
+
+    # -------------------------
+    # STEP 2: CALL RETELL
+    # -------------------------
     payload = {
         "override_agent_id": RETELL_AGENT_ID,
         "from_number": RETELL_PHONE_NUMBER,
         "to_number": dialed_phone,
         "metadata": {
-            # Core context
+            "vendor_call_id": vendor_call_id,          # 🔑 CRITICAL
             "project_request_id": project_request_id,
             "project_address": project_address,
             "trade": trade,
             "callback_phone": callback_phone,
 
-            # Vendor info
-            "vendor_name": vendor.get("name"),
+            "vendor_name": vendor_name,
             "original_vendor_phone": vendor_phone,
             "dialed_phone": dialed_phone,
 
-            # Attachments (links/ids) to be used by backend email sender
             "attachments": att_list,
 
-            # Debug
             "source": "file-server-retell-autodial",
-            "mode": "test" if (TEST_PHONE_NUMBER and dialed_phone == TEST_PHONE_NUMBER) else "live",
+            "mode": "test" if dialed_phone == TEST_PHONE_NUMBER else "live",
         },
     }
 
-    logger.info("📞 RETELL CALL: dialing=%s original_vendor=%s", dialed_phone, vendor_phone)
+    logger.info("📞 RETELL PAYLOAD: %s", payload)
 
     res = requests.post(
         RETELL_CALL_ENDPOINT,
@@ -110,13 +128,15 @@ async def autodial_start(
         timeout=30,
     )
 
-    logger.info("📞 RETELL STATUS=%s body=%s", res.status_code, res.text[:300])
     if res.status_code >= 400:
-        raise HTTPException(status_code=500, detail=f"Retell call failed: {res.text}")
+        logger.error("❌ Retell call failed: %s", res.text)
+        raise HTTPException(status_code=500, detail="Retell call failed")
+
+    logger.info("🔥 RETELL CALL STARTED | vendor_call_id=%s", vendor_call_id)
 
     return {
         "status": "ok",
+        "vendor_call_id": vendor_call_id,
         "dialed_phone": dialed_phone,
-        "original_vendor_phone": vendor_phone,
         "retell": res.json(),
     }
