@@ -108,6 +108,7 @@ app.include_router(admin_beta_router)
 app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
 app.include_router(autodial_vapi_router)
+app.include_router(autodial.router)   # exposes /autodial/test (and /autodial/start if present)
 
 print("🔥 RUNNING app.main 🔥")
 
