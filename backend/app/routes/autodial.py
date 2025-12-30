@@ -9,7 +9,6 @@ from app.db import get_db
 from app.models.vendor_call import VendorCall
 from app.models.activity_log import ActivityLog
 from app.services.resolve_dial import resolve_dial_number
-from app.services.call_engine import start_retell_call  # ✅ RETELL ONLY
 
 logger = logging.getLogger(__name__)
 
