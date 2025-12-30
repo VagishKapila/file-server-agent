@@ -408,4 +408,4 @@ async def retell_webhook(
         len(attachment_ids),
     )
 
-    return {"ok": True}payload = await request.json()
+    return {"ok": True}
