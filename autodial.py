@@ -12,7 +12,7 @@ TEST_PHONE_NUMBER = os.getenv("TEST_PHONE_NUMBER")  # optional: file-server side
 if not BACKEND_BASE_URL:
     raise RuntimeError("BACKEND_BASE_URL is not set")
 
-BACKEND_RETELL_AUTODIAL_ENDPOINT = f"{BACKEND_BASE_URL.rstrip('/')}/autodial/start"
+BACKEND_RETELL_AUTODIAL_ENDPOINT = f"{BACKEND_BASE_URL.rstrip('/')}/autodial_vapi/start"
 
 
 def _enforce_test_number(phone: str) -> str:
