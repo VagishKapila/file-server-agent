@@ -46,8 +46,7 @@ async def retell_webhook(
 
     vendor_call = await db.get(VendorCall, int(vendor_call_id))
     if not vendor_call:
-        logger.error("VendorCall missing: %s", vendor_call_id)
-        return {"ok": True}
+        logger.warning("⚠️ No attachments — sending email anyway")
 
     project_request_id = vendor_call.project_request_id
 
