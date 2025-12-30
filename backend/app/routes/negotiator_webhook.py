@@ -379,14 +379,16 @@ async def retell_webhook(
 
     try:
         await send_vendor_email(
-            payload={
-                "vendor_email": email,
-                "attachments": attachment_ids,
-                "subject": "Project Drawings – BAINS Development",
-                "message": "As discussed on the call, attached are the project files.",
-            },
-            db=db,
-        )
+        payload={
+            "vendor_email": email,
+            "project_request_id": vendor_call.project_request_id,
+            "attachments": attachment_ids,
+            "subject": "Project Drawings – BAINS Development",
+            "message": "As discussed on the call, attached are the project files.",
+            "related_call_id": call_id,
+        },
+        db=db,
+    )
     except Exception:
         logger.exception("❌ EMAIL SEND FAILED | call_id=%s", call_id)
         raise
