@@ -21,7 +21,7 @@ async def retell_webhook(
     payload = await request.json()
 
     # --------------------------------------------------
-    # DEBUG: RAW PAYLOAD (TEMP – REQUIRED)
+    # DEBUG: RAW PAYLOAD (KEEP)
     # --------------------------------------------------
     logger.warning("📥 RETELL RAW PAYLOAD: %s", payload)
 
@@ -33,63 +33,75 @@ async def retell_webhook(
     ended_reason = call.get("endedReason")
 
     if not call_id:
-        logger.error("❌ Missing call.id")
+        logger.error("❌ Missing call.id in Retell payload")
         return {"ok": True}
 
     metadata = call.get("metadata") or {}
 
     # --------------------------------------------------
-    # RESOLVE ATTACHMENTS (KEY FIX)
+    # RESOLVE VENDOR CALL ID (MANDATORY)
     # --------------------------------------------------
-    attachment_ids = (
+    vendor_call_id = metadata.get("vendor_call_id")
+
+    if not isinstance(vendor_call_id, int):
+        logger.error(
+            "❌ vendor_call_id missing or invalid | call_id=%s metadata=%s",
+            call_id,
+            metadata,
+        )
+        return {"ok": True}
+
+    # --------------------------------------------------
+    # RESOLVE ATTACHMENTS (ROBUST)
+    # --------------------------------------------------
+    raw_attachments = (
         metadata.get("attachment_ids")
         or metadata.get("attachments")
         or []
     )
 
-    if isinstance(attachment_ids, list):
-        attachment_ids = [x for x in attachment_ids if isinstance(x, int)]
+    if isinstance(raw_attachments, list):
+        attachment_ids = [x for x in raw_attachments if isinstance(x, int)]
     else:
         attachment_ids = []
 
-    # --------------------------------------------------
-    # RESOLVE VENDOR CALL ID (SOURCE OF TRUTH)
-    # --------------------------------------------------
-    vendor_call_id = metadata.get("vendor_call_id")
-
-    if not vendor_call_id:
-        logger.error("❌ vendor_call_id missing in metadata | call_id=%s", call_id)
-        return {"ok": True}
+    logger.info(
+        "📎 Parsed attachments | call_id=%s attachments=%s",
+        call_id,
+        attachment_ids,
+    )
 
     # --------------------------------------------------
-    # ENSURE VendorCall EXISTS (DO NOT DUPLICATE)
+    # LOAD VendorCall (NO DUPLICATES)
     # --------------------------------------------------
-    existing_vc = await db.execute(
+    result = await db.execute(
         select(VendorCall).where(VendorCall.id == vendor_call_id)
     )
-    vendor_call = existing_vc.scalar_one_or_none()
+    vendor_call = result.scalar_one_or_none()
 
     if not vendor_call:
         logger.error(
-            "❌ VendorCall not found | vendor_call_id=%s call_id=%s",
+            "❌ VendorCall NOT FOUND | vendor_call_id=%s call_id=%s",
             vendor_call_id,
             call_id,
         )
         return {"ok": True}
 
-    # Link retell call id if missing
+    # --------------------------------------------------
+    # LINK RETELL CALL ID (ONCE)
+    # --------------------------------------------------
     if not vendor_call.retell_call_id:
         vendor_call.retell_call_id = call_id
         vendor_call.status = "completed"
 
     # --------------------------------------------------
-    # SAVE ATTACHMENTS (CRITICAL FOR EMAIL)
+    # SAVE ATTACHMENTS (ONCE PER CALL)
     # --------------------------------------------------
     if attachment_ids:
-        existing_ca = await db.execute(
+        existing = await db.execute(
             select(CallAttachments).where(CallAttachments.call_id == call_id)
         )
-        if not existing_ca.scalar_one_or_none():
+        if not existing.scalar_one_or_none():
             db.add(
                 CallAttachments(
                     call_id=call_id,
@@ -97,7 +109,7 @@ async def retell_webhook(
                 )
             )
             logger.info(
-                "📎 Attachments saved | call_id=%s count=%d",
+                "📎 Attachments persisted | call_id=%s count=%d",
                 call_id,
                 len(attachment_ids),
             )
@@ -105,7 +117,7 @@ async def retell_webhook(
     await db.commit()
 
     # --------------------------------------------------
-    # AI ANALYSIS → EMAIL LOGIC (NO SILENT EXIT)
+    # AI ANALYSIS → EMAIL GATE
     # --------------------------------------------------
     analysis = call.get("call_analysis") or {}
     custom = analysis.get("custom_analysis_data") or {}
@@ -120,19 +132,25 @@ async def retell_webhook(
         logger.error("❌ No email captured | call_id=%s", call_id)
         return {"ok": True}
 
-    # Prevent duplicate sends
-    existing_email = await db.execute(
+    if not email_confirmed:
+        logger.warning("⚠️ Email not confirmed | call_id=%s email=%s", call_id, email)
+        return {"ok": True}
+
+    if not attachment_ids:
+        logger.error("❌ Email blocked — no attachments | call_id=%s", call_id)
+        return {"ok": True}
+
+    # --------------------------------------------------
+    # PREVENT DUPLICATE EMAILS
+    # --------------------------------------------------
+    sent = await db.execute(
         select(EmailLog).where(
             EmailLog.related_call_id == call_id,
             EmailLog.email_type == "retell_vendor",
         )
     )
-    if existing_email.scalar_one_or_none():
+    if sent.scalar_one_or_none():
         logger.warning("⚠️ Email already sent | call_id=%s", call_id)
-        return {"ok": True}
-
-    if not attachment_ids:
-        logger.error("❌ Email blocked — no attachments | call_id=%s", call_id)
         return {"ok": True}
 
     # --------------------------------------------------
@@ -172,9 +190,9 @@ async def retell_webhook(
     await db.commit()
 
     logger.info(
-        "✅ EMAIL SENT | call_id=%s email=%s attachments=%d",
+        "✅ EMAIL SENT | call_id=%s vendor_call_id=%s attachments=%d",
         call_id,
-        email,
+        vendor_call_id,
         len(attachment_ids),
     )
 
