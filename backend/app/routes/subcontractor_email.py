@@ -1,7 +1,7 @@
 import logging
-from typing import List, Union, Dict, Any
+from typing import List, Union, Dict, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,38 +26,39 @@ class AttachmentIn(BaseModel):
 
 class SendSubEmailRequest(BaseModel):
     vendor_email: str
-    project_request_id: int
+    project_request_id: Optional[int] = None
     subject: str
     message: str
     attachments: List[Union[int, AttachmentIn]]
 
 
 # -------------------------------------------------------------------
-# SHARED CORE LOGIC (USED BY API + WEBHOOK)
+# CORE EMAIL LOGIC (USED BY API + RETELL)
 # -------------------------------------------------------------------
 
 async def _send_email_core(
     *,
     db: AsyncSession,
     vendor_email: str,
-    project_request_id: int,
+    project_request_id: Optional[int],
     subject: str,
     message: str,
     attachments: List[Union[int, AttachmentIn]],
-    related_call_id: str | None = None,
+    related_call_id: Optional[str] = None,
 ) -> Dict[str, Any]:
 
     resolved_attachments: List[Dict[str, str]] = []
 
+    # ---------------- RESOLVE ATTACHMENTS ----------------
     for a in attachments:
-        # ---------------- DB FILE BY ID ----------------
         if isinstance(a, int):
-            stmt = select(ProjectFile).where(ProjectFile.id == a)
-            res = await db.execute(stmt)
+            res = await db.execute(
+                select(ProjectFile).where(ProjectFile.id == a)
+            )
             file = res.scalars().first()
 
             if not file:
-                logger.warning("Attachment ID %s not found in DB", a)
+                logger.warning("Attachment ID %s not found", a)
                 continue
 
             if not file.stored_path or not file.stored_path.startswith("r2://"):
@@ -65,33 +66,25 @@ async def _send_email_core(
                 continue
 
             resolved_attachments.append(
-                {
-                    "path": file.stored_path,
-                    "filename": file.filename,
-                }
+                {"path": file.stored_path, "filename": file.filename}
             )
 
-        # ---------------- DIRECT PATH ----------------
         else:
             if not a.path.startswith("r2://"):
                 logger.warning("Direct attachment ignored (not R2): %s", a.path)
                 continue
 
             resolved_attachments.append(
-                {
-                    "path": a.path,
-                    "filename": a.filename,
-                }
+                {"path": a.path, "filename": a.filename}
             )
 
     logger.info(
-        "Sending email → %s | project=%s | attachments=%d",
+        "📧 Sending email → %s | attachments=%d",
         vendor_email,
-        project_request_id,
         len(resolved_attachments),
     )
 
-    # ---- SEND EMAIL (do not block on attachments) ----
+    # ---------------- SEND EMAIL (ALWAYS) ----------------
     send_project_email(
         to_email=vendor_email,
         subject=subject,
@@ -99,22 +92,35 @@ async def _send_email_core(
         attachments=resolved_attachments,
     )
 
-    # ---- ALWAYS LOG EMAIL ATTEMPT ----
-    email_log = EmailLog(
-        project_request_id=project_request_id,
-        recipient_email=vendor_email,
-        email_type="vendor_project_files",
-        related_call_id=related_call_id,
-    )
+    # ---------------- SAFE EMAIL LOG ----------------
+    if project_request_id:
+        try:
+            db.add(
+                EmailLog(
+                    project_request_id=project_request_id,
+                    recipient_email=vendor_email,
+                    email_type="vendor_project_files",
+                    related_call_id=related_call_id,
+                )
+            )
+            await db.commit()
 
-    db.add(email_log)
-    await db.commit()
+            logger.info(
+                "📒 Email logged | project=%s | call=%s",
+                project_request_id,
+                related_call_id,
+            )
 
-    logger.info(
-        "Email logged → %s | project=%s",
-        vendor_email,
-        project_request_id,
-    )
+        except Exception:
+            logger.exception(
+                "❌ Email sent BUT log failed (FK or data issue) | project=%s",
+                project_request_id,
+            )
+            await db.rollback()
+    else:
+        logger.warning(
+            "⚠️ Email sent WITHOUT logging (missing project_request_id)"
+        )
 
     return {
         "status": "ok",
@@ -124,7 +130,7 @@ async def _send_email_core(
 
 
 # -------------------------------------------------------------------
-# PUBLIC API ENDPOINT
+# PUBLIC API
 # -------------------------------------------------------------------
 
 @router.post("/send")
@@ -143,30 +149,14 @@ async def send_subcontractor_email(
 
 
 # -------------------------------------------------------------------
-# INTERNAL USE — CALLED BY RETELL WEBHOOK
+# INTERNAL — RETELL WEBHOOK
 # -------------------------------------------------------------------
 
 async def send_vendor_email(payload: dict, db: AsyncSession):
-    """
-    Expected payload keys:
-      - vendor_email
-      - project_request_id
-      - subject
-      - message
-      - attachments
-      - related_call_id (optional)
-    """
-
-    required = {"vendor_email", "subject", "message", "attachments"}
-    missing = required - payload.keys()
-
-    if missing:
-        raise ValueError(f"Missing required email fields: {missing}")
-
     return await _send_email_core(
         db=db,
         vendor_email=payload["vendor_email"],
-        project_request_id=payload.get("project_request_id", 0),
+        project_request_id=payload.get("project_request_id"),
         subject=payload["subject"],
         message=payload["message"],
         attachments=payload.get("attachments", []),
