@@ -23,49 +23,76 @@ async def retell_webhook(
     data = await request.json()
     logger.info("🔥 RETELL RAW PAYLOAD: %s", data)
 
-    call = data.get("call", {}) or {}
+    event = data.get("event")
 
-    # ✅ DEFENSIVE ANALYSIS EXTRACTION (RETELL-SAFE)
-    analysis = (
-        data.get("analysis", {}).get("custom_analysis")
+    # ---------------------------------------------------------
+    # 🔒 RULE #1: ONLY process finalized AI output
+    # Retell guarantees structured AI results ONLY on call_analyzed
+    # ---------------------------------------------------------
+    if event != "call_analyzed":
+        return {"ok": True}
+
+    call = data.get("call") or {}
+    analysis = data.get("analysis") or {}
+
+    # ---------------------------------------------------------
+    # 🔒 RULE #2: Defensive extraction (RETELL-PROVEN)
+    # This matches real dashboard + webhook payloads
+    # ---------------------------------------------------------
+    structured = (
+        analysis.get("custom_analysis")
         or data.get("custom_analysis")
         or call.get("call_analysis", {}).get("custom_analysis_data")
         or {}
     )
 
-    email = analysis.get("email")
-    confirmed = analysis.get("email_confirmed") is True
+    email = structured.get("email")
+    confirmed = structured.get("email_confirmed") is True
+
     vendor_phone = call.get("to_number")
     retell_call_id = call.get("call_id")
 
+    metadata = call.get("metadata") or {}
+    vendor_call_id = metadata.get("vendor_call_id")
+
     logger.warning(
-        "🧪 RETELL PARSED | call_id=%s phone=%s email=%s confirmed=%s",
+        "🧪 RETELL FINAL | event=%s call_id=%s phone=%s email=%s confirmed=%s metadata=%s",
+        event,
         retell_call_id,
         vendor_phone,
         email,
         confirmed,
+        metadata,
     )
 
+    # ---------------------------------------------------------
+    # 🔒 RULE #3: Hard guards (NO SIDE EFFECTS if missing)
+    # ---------------------------------------------------------
     if not email or not confirmed or not vendor_phone:
         return {"ok": True}
 
-    # ✅ FIND MOST RECENT VENDOR CALL (SOURCE OF TRUTH)
-    res = await db.execute(
-        select(VendorCall)
-        .where(VendorCall.vendor_phone == vendor_phone)
-        .where(VendorCall.status.in_(["pending", "called"]))
-        .order_by(VendorCall.created_at.desc())
-        .limit(1)
-    )
-    vendor_call = res.scalar_one_or_none()
+    if not vendor_call_id:
+        logger.error("❌ Missing vendor_call_id in Retell metadata")
+        return {"ok": True}
+
+    # ---------------------------------------------------------
+    # 🔒 RULE #4: Deterministic VendorCall lookup (NO GUESSING)
+    # ---------------------------------------------------------
+    vendor_call = await db.get(VendorCall, int(vendor_call_id))
 
     if not vendor_call:
-        logger.error("❌ No VendorCall found for phone=%s", vendor_phone)
+        logger.error(
+            "❌ VendorCall not found | vendor_call_id=%s call_id=%s",
+            vendor_call_id,
+            retell_call_id,
+        )
         return {"ok": True}
 
     project_request_id = vendor_call.project_request_id
 
-    # ✅ UPSERT VENDOR CONTACT
+    # ---------------------------------------------------------
+    # 🔒 RULE #5: UPSERT VendorContact (idempotent)
+    # ---------------------------------------------------------
     res = await db.execute(
         select(VendorContact)
         .where(VendorContact.email == email)
@@ -81,7 +108,9 @@ async def retell_webhook(
         db.add(vendor_contact)
         await db.flush()
 
-    # ✅ UPDATE VENDOR CALL
+    # ---------------------------------------------------------
+    # 🔒 RULE #6: Update VendorCall (single source of truth)
+    # ---------------------------------------------------------
     await db.execute(
         update(VendorCall)
         .where(VendorCall.id == vendor_call.id)
@@ -91,7 +120,9 @@ async def retell_webhook(
         )
     )
 
-    # ✅ AUDIT (NON-NEGOTIABLE)
+    # ---------------------------------------------------------
+    # 🔒 RULE #7: Immutable audit trail (NON-NEGOTIABLE)
+    # ---------------------------------------------------------
     await db.execute(
         insert(retell_call_audit).values(
             retell_call_id=retell_call_id,
@@ -104,7 +135,9 @@ async def retell_webhook(
         )
     )
 
-    # ✅ FETCH PROJECT FILES
+    # ---------------------------------------------------------
+    # 🔒 RULE #8: Fetch attachments (exact behavior preserved)
+    # ---------------------------------------------------------
     res = await db.execute(
         select(ProjectFile)
         .where(ProjectFile.project_request_id == project_request_id)
@@ -117,7 +150,9 @@ async def retell_webhook(
         if f.stored_path and f.stored_path.startswith("r2://")
     ]
 
-    # ✅ SEND EMAIL
+    # ---------------------------------------------------------
+    # 🔒 RULE #9: Send email (final side effect)
+    # ---------------------------------------------------------
     send_project_email(
         to_email=email,
         subject="Project Files",
@@ -128,8 +163,9 @@ async def retell_webhook(
     await db.commit()
 
     logger.info(
-        "🔥 EMAIL SENT | vendor_call_id=%s attachments=%s",
+        "🔥 EMAIL SENT | vendor_call_id=%s email=%s attachments=%s",
         vendor_call.id,
+        email,
         len(attachments),
     )
 
