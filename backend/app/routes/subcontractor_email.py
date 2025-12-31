@@ -15,6 +15,24 @@ router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
 logger = logging.getLogger("subcontractor-email")
 
 
+# -------------------------------------------------------------------
+# HELPERS
+# -------------------------------------------------------------------
+
+def _safe_text(s: str) -> str:
+    if not s:
+        return ""
+    return (
+        s.encode("utf-8", "ignore")
+         .decode("utf-8", "ignore")
+         .replace("\x00", "")
+    )
+
+
+# -------------------------------------------------------------------
+# SCHEMAS
+# -------------------------------------------------------------------
+
 class AttachmentIn(BaseModel):
     path: str
     filename: str
@@ -27,6 +45,10 @@ class SendSubEmailRequest(BaseModel):
     message: str
     attachments: List[Union[int, AttachmentIn]]
 
+
+# -------------------------------------------------------------------
+# CORE EMAIL LOGIC (USED BY API + RETELL)
+# -------------------------------------------------------------------
 
 async def _send_email_core(
     *,
@@ -41,6 +63,7 @@ async def _send_email_core(
 
     resolved_attachments: List[Dict[str, str]] = []
 
+    # ---------------- RESOLVE ATTACHMENTS ----------------
     for a in attachments:
         if isinstance(a, int):
             res = await db.execute(
@@ -52,13 +75,12 @@ async def _send_email_core(
                 logger.warning("Attachment ID %s not found", a)
                 continue
 
-            # ✅ FIX: use real R2 key
-            if not file.r2_path or not file.r2_path.startswith("r2://"):
+            if not file.stored_path or not file.stored_path.startswith("r2://"):
                 logger.warning("Attachment %s ignored (not R2)", a)
                 continue
 
             resolved_attachments.append(
-                {"path": file.r2_path, "filename": file.filename}
+                {"path": file.stored_path, "filename": file.filename}
             )
 
         else:
@@ -70,19 +92,28 @@ async def _send_email_core(
                 {"path": a.path, "filename": a.filename}
             )
 
+    # 🔴 HARD FAIL IF ATTACHMENTS REQUESTED BUT NONE RESOLVED
+    if attachments and not resolved_attachments:
+        raise RuntimeError("Attachments requested but none could be resolved from R2")
+
     logger.info(
         "📧 Sending email → %s | attachments=%d",
         vendor_email,
         len(resolved_attachments),
     )
 
+    # ---------------- SEND EMAIL ----------------
+    safe_subject = _safe_text(subject)
+    safe_message = _safe_text(message)
+
     send_project_email(
         to_email=vendor_email,
-        subject=subject,
-        body=message,
+        subject=safe_subject,
+        body=safe_message,
         attachments=resolved_attachments,
     )
 
+    # ---------------- SAFE EMAIL LOG ----------------
     if project_request_id:
         try:
             db.add(
@@ -94,9 +125,23 @@ async def _send_email_core(
                 )
             )
             await db.commit()
+
+            logger.info(
+                "📒 Email logged | project=%s | call=%s",
+                project_request_id,
+                related_call_id,
+            )
+
         except Exception:
-            logger.exception("Email sent but logging failed")
+            logger.exception(
+                "❌ Email sent BUT log failed | project=%s",
+                project_request_id,
+            )
             await db.rollback()
+    else:
+        logger.warning(
+            "⚠️ Email sent WITHOUT logging (missing project_request_id)"
+        )
 
     return {
         "status": "ok",
@@ -104,6 +149,10 @@ async def _send_email_core(
         "attachments": len(resolved_attachments),
     }
 
+
+# -------------------------------------------------------------------
+# PUBLIC API
+# -------------------------------------------------------------------
 
 @router.post("/send")
 async def send_subcontractor_email(
@@ -119,6 +168,10 @@ async def send_subcontractor_email(
         attachments=payload.attachments,
     )
 
+
+# -------------------------------------------------------------------
+# INTERNAL — RETELL WEBHOOK
+# -------------------------------------------------------------------
 
 async def send_vendor_email(payload: dict, db: AsyncSession):
     return await _send_email_core(
