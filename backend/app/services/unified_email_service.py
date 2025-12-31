@@ -1,69 +1,70 @@
+import os
 import logging
-from typing import List, Dict, Any
+import mimetypes
+import smtplib
+from email.message import EmailMessage
 
-import boto3
-from app.core.config import settings
+from app.services.r2download import download_r2_object
 
-logger = logging.getLogger("unified-email")
+logger = logging.getLogger("email-service")
 
-
-# -------------------------------------------------------------------
-# R2 CLIENT (INLINE — NO IMPORTS)
-# -------------------------------------------------------------------
-
-def _get_r2_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=settings.R2_ENDPOINT,
-        aws_access_key_id=settings.R2_ACCESS_KEY_ID,
-        aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
-        region_name="auto",
-    )
+SMTP_HOST = os.getenv("SMTP_HOST")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
 
-# -------------------------------------------------------------------
-# PUBLIC EMAIL SENDER (USED EVERYWHERE)
-# -------------------------------------------------------------------
+def send_project_email(to_email, subject, body, attachments):
+    msg = EmailMessage()
+    msg["From"] = FROM_EMAIL
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.set_content(body or "")
 
-def send_project_email(
-    *,
-    to_email: str,
-    subject: str,
-    body: str,
-    attachments: List[Dict[str, Any]] | None = None,
-):
-    """
-    attachments = [
-        {
-            "filename": "file.pdf",
-            "content": b"...bytes..."
-        }
-    ]
-    """
+    attached = 0
 
-    from app.services.smtp_mailer import send_email  # 🔑 local import avoids cycles
+    for a in (attachments or []):
+        path = a.get("path")
+        filename = a.get("filename") or a.get("name")
 
-    prepared_attachments = []
+        if not path or not filename:
+            logger.warning("Skipping attachment (missing fields): %s", a)
+            continue
 
-    if attachments:
-        for a in attachments:
-            if not a.get("filename") or not a.get("content"):
-                logger.warning("Skipping invalid attachment: %s", a)
-                continue
+        # ✅ R2 only (for now)
+        if not path.startswith("r2://"):
+            logger.info("Skipping non-R2 attachment path=%s", path)
+            continue
 
-            prepared_attachments.append(
-                (a["filename"], a["content"])
-            )
+        data = download_r2_object(path)
+        if not data:
+            logger.warning("Skipping attachment (download failed): %s", path)
+            continue
 
-    logger.info(
-        "📧 Sending email → %s | attachments=%d",
-        to_email,
-        len(prepared_attachments),
-    )
+        mime_type, _ = mimetypes.guess_type(filename)
+        maintype, subtype = (mime_type or "application/octet-stream").split("/", 1)
 
-    send_email(
-        to=to_email,
-        subject=subject,
-        body=body,
-        attachments=prepared_attachments,
-    )
+        msg.add_attachment(
+            data,
+            maintype=maintype,
+            subtype=subtype,
+            filename=filename,
+        )
+        attached += 1
+
+    logger.info("Attachments added: %d", attached)
+
+    if attached == 0:
+        logger.warning("Email sent WITHOUT attachments")
+
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        logger.error("SMTP env not configured — aborting send")
+        return
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
+
+    logger.info("Email sent to %s", to_email)
