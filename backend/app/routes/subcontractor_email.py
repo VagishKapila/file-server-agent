@@ -1,176 +1,69 @@
 import logging
-from typing import List, Union, Dict, Any, Optional
+from typing import List, Dict, Any
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import boto3
+from app.core.config import settings
 
-from app.db import get_db
-from app.models.project_files import ProjectFile
-from app.models.email_log import EmailLog
-
-router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
-logger = logging.getLogger("subcontractor-email")
+logger = logging.getLogger("unified-email")
 
 
 # -------------------------------------------------------------------
-# HELPERS
+# R2 CLIENT (INLINE — NO IMPORTS)
 # -------------------------------------------------------------------
 
-def _safe_text(s: str) -> str:
-    if not s:
-        return ""
-    return (
-        s.encode("utf-8", "ignore")
-        .decode("utf-8", "ignore")
-        .replace("\x00", "")
+def _get_r2_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.R2_ENDPOINT,
+        aws_access_key_id=settings.R2_ACCESS_KEY_ID,
+        aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
+        region_name="auto",
     )
 
 
 # -------------------------------------------------------------------
-# SCHEMAS
+# PUBLIC EMAIL SENDER (USED EVERYWHERE)
 # -------------------------------------------------------------------
 
-class AttachmentIn(BaseModel):
-    path: str
-    filename: str
-
-
-class SendSubEmailRequest(BaseModel):
-    vendor_email: str
-    project_request_id: Optional[int] = None
-    subject: str
-    message: str
-    attachments: List[Union[int, AttachmentIn]]
-
-
-# -------------------------------------------------------------------
-# CORE EMAIL LOGIC
-# -------------------------------------------------------------------
-
-async def _send_email_core(
+def send_project_email(
     *,
-    db: AsyncSession,
-    vendor_email: str,
-    project_request_id: Optional[int],
+    to_email: str,
     subject: str,
-    message: str,
-    attachments: List[Union[int, AttachmentIn]],
-    related_call_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    body: str,
+    attachments: List[Dict[str, Any]] | None = None,
+):
+    """
+    attachments = [
+        {
+            "filename": "file.pdf",
+            "content": b"...bytes..."
+        }
+    ]
+    """
 
-    resolved_attachments: List[Dict[str, str]] = []
+    from app.services.smtp_mailer import send_email  # 🔑 local import avoids cycles
 
-    # ---------------- RESOLVE ATTACHMENTS ----------------
-    for a in attachments:
-        if isinstance(a, int):
-            res = await db.execute(
-                select(ProjectFile).where(ProjectFile.id == a)
-            )
-            file = res.scalars().first()
+    prepared_attachments = []
 
-            if not file:
-                logger.warning("❌ Attachment ID %s not found", a)
+    if attachments:
+        for a in attachments:
+            if not a.get("filename") or not a.get("content"):
+                logger.warning("Skipping invalid attachment: %s", a)
                 continue
 
-            if not file.stored_path or not file.stored_path.startswith("r2://"):
-                logger.warning(
-                    "❌ Attachment %s ignored (invalid stored_path: %s)",
-                    a,
-                    file.stored_path,
-                )
-                continue
-
-            resolved_attachments.append(
-                {"path": file.stored_path, "filename": file.filename}
+            prepared_attachments.append(
+                (a["filename"], a["content"])
             )
-
-        else:
-            if not a.path.startswith("r2://"):
-                logger.warning(
-                    "❌ Direct attachment ignored (not R2): %s", a.path
-                )
-                continue
-
-            resolved_attachments.append(
-                {"path": a.path, "filename": a.filename}
-            )
-
-    if attachments and not resolved_attachments:
-        logger.error(
-            "⚠️ Attachments requested but NONE resolved | requested=%s",
-            attachments,
-        )
 
     logger.info(
-        "📧 Sending email → %s | resolved_attachments=%d",
-        vendor_email,
-        len(resolved_attachments),
+        "📧 Sending email → %s | attachments=%d",
+        to_email,
+        len(prepared_attachments),
     )
 
-    # ---------------- SEND EMAIL ----------------
-    send_project_email(
-        to_email=vendor_email,
-        subject=_safe_text(subject),
-        body=_safe_text(message),
-        attachments=resolved_attachments,
-    )
-
-    # ---------------- EMAIL LOG ----------------
-    if project_request_id:
-        try:
-            db.add(
-                EmailLog(
-                    project_request_id=project_request_id,
-                    recipient_email=vendor_email,
-                    email_type="vendor_project_files",
-                    related_call_id=related_call_id,
-                )
-            )
-            await db.commit()
-        except Exception:
-            logger.exception("❌ Email sent but log failed")
-            await db.rollback()
-
-    return {
-        "status": "ok",
-        "sent_to": vendor_email,
-        "requested_attachments": len(attachments),
-        "resolved_attachments": len(resolved_attachments),
-    }
-
-
-# -------------------------------------------------------------------
-# PUBLIC API
-# -------------------------------------------------------------------
-
-@router.post("/send")
-async def send_subcontractor_email(
-    payload: SendSubEmailRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    return await _send_email_core(
-        db=db,
-        vendor_email=payload.vendor_email,
-        project_request_id=payload.project_request_id,
-        subject=payload.subject,
-        message=payload.message,
-        attachments=payload.attachments,
-    )
-
-
-# -------------------------------------------------------------------
-# INTERNAL — RETELL WEBHOOK
-# -------------------------------------------------------------------
-
-async def send_vendor_email(payload: dict, db: AsyncSession):
-    return await _send_email_core(
-        db=db,
-        vendor_email=payload["vendor_email"],
-        project_request_id=payload.get("project_request_id"),
-        subject=payload["subject"],
-        message=payload["message"],
-        attachments=payload.get("attachments", []),
-        related_call_id=payload.get("related_call_id"),
+    send_email(
+        to=to_email,
+        subject=subject,
+        body=body,
+        attachments=prepared_attachments,
     )
