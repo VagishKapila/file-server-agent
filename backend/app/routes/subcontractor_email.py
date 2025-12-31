@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.models.project_files import ProjectFile
 from app.models.email_log import EmailLog
-from app.services.unified_email_service import send_project_email
 
 router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
 logger = logging.getLogger("subcontractor-email")
