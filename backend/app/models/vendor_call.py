@@ -34,6 +34,6 @@ class VendorCall(Base):
     confirmed_at = Column(DateTime, nullable=True)
 
     # 🔒 FINALIZATION GATE (CRITICAL)
-    finalized_at = Column(DateTime(timezone=True), nullable=True)
+    #finalized_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
