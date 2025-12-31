@@ -19,9 +19,8 @@ class VendorCall(Base):
     vendor_phone = Column(String, index=True)
 
     # -----------------------------
-    # RETELL LINK (CRITICAL FIX)
+    # RETELL LINK
     # -----------------------------
-    # This MUST exist because the DB already has it
     retell_call_id = Column(String, index=True)
 
     # -----------------------------
@@ -33,5 +32,8 @@ class VendorCall(Base):
     status = Column(String, default="pending")
 
     confirmed_at = Column(DateTime, nullable=True)
+
+    # 🔒 FINALIZATION GATE (CRITICAL)
+    finalized_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
