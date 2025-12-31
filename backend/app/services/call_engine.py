@@ -1,7 +1,6 @@
 import logging
 import os
 import requests
-
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.vendor_call import VendorCall
 
@@ -28,9 +27,9 @@ async def start_retell_call(
     SINGLE source of truth for outbound Retell calls.
     """
 
-    # --------------------------------------------------
-    # 1️⃣ Create VendorCall FIRST (DB truth anchor)
-    # --------------------------------------------------
+    # -------------------------
+    # 1️⃣ Create VendorCall FIRST
+    # -------------------------
     vc = VendorCall(
         project_request_id=project_request_id,
         trade=trade,
@@ -40,11 +39,10 @@ async def start_retell_call(
     )
 
     db.add(vc)
-    await db.flush()  # 🔑 vc.id now exists
+    await db.flush()  # vc.id guaranteed
 
-    # 🧱 DEBUG POINT #1 — DB truth BEFORE Retell
     logger.warning(
-        "[RETELL CALL ENGINE | PRE-RETELL]",
+        "[RETELL CALL ENGINE] creating call",
         extra={
             "project_request_id": project_request_id,
             "vendor_call_id": vc.id,
@@ -54,33 +52,21 @@ async def start_retell_call(
         },
     )
 
-    # --------------------------------------------------
-    # 2️⃣ Build deterministic Retell payload
-    # --------------------------------------------------
+    # -------------------------
+    # 2️⃣ Retell payload (ONLY here)
+    # -------------------------
     payload = {
         "override_agent_id": RETELL_AGENT_ID,
         "from_number": RETELL_PHONE_NUMBER,
         "to_number": phone_number,
         "metadata": {
-            "vendor_call_id": vc.id,              # 🔑 REQUIRED
+            "vendor_call_id": vc.id,
             "project_request_id": project_request_id,
-            "attachments": attachments or [],     # 🔑 CRITICAL
+            "attachments": attachments or [],
             "source": source,
         },
     }
 
-    # 🧱 DEBUG POINT #2 — EXACT payload sent to Retell
-    logger.warning(
-        "[RETELL API PAYLOAD]",
-        extra={
-            "vendor_call_id": vc.id,
-            "payload_metadata": payload["metadata"],
-        },
-    )
-
-    # --------------------------------------------------
-    # 3️⃣ Call Retell
-    # --------------------------------------------------
     res = requests.post(
         RETELL_ENDPOINT,
         headers={
@@ -94,11 +80,19 @@ async def start_retell_call(
     res.raise_for_status()
     retell_data = res.json()
 
-    # --------------------------------------------------
-    # 4️⃣ Persist Retell call ID
-    # --------------------------------------------------
+    # -------------------------
+    # 3️⃣ Persist retell_call_id
+    # -------------------------
     vc.retell_call_id = retell_data.get("call_id")
     await db.commit()
+
+    logger.warning(
+        "[RETELL CALL ENGINE] call started",
+        extra={
+            "vendor_call_id": vc.id,
+            "retell_call_id": vc.retell_call_id,
+        },
+    )
 
     return {
         "vendor_call_id": vc.id,
