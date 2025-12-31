@@ -1,5 +1,4 @@
 import logging
-import tempfile
 from typing import List, Union, Dict, Any, Optional
 
 from fastapi import APIRouter, Depends
@@ -10,12 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.models.project_files import ProjectFile
 from app.models.email_log import EmailLog
-from app.services.unified_email_service import send_project_email
+from app.services.r2_client import get_r2_client
 
-from app.services.r2_client import get_r2_client  # 🔑 existing R2 client
+# 🚫 DO NOT import unified_email_service inside itself
+# ✅ send_project_email is defined BELOW
 
 router = APIRouter(prefix="/email/sub", tags=["subcontractor-email"])
-logger = logging.getLogger("subcontractor-email")
+logger = logging.getLogger("unified-email")
 
 
 # -------------------------------------------------------------------
@@ -33,6 +33,35 @@ class SendSubEmailRequest(BaseModel):
     subject: str
     message: str
     attachments: List[Union[int, AttachmentIn]]
+
+
+# -------------------------------------------------------------------
+# EMAIL SENDER (SINGLE SOURCE OF TRUTH)
+# -------------------------------------------------------------------
+
+def send_project_email(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    attachments: List[Dict[str, Any]],
+):
+    """
+    attachments = [
+        {
+            "filename": "file.pdf",
+            "content": b"...bytes..."
+        }
+    ]
+    """
+    from app.services.smtp_mailer import send_email  # local import = safe
+
+    send_email(
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        attachments=attachments,
+    )
 
 
 # -------------------------------------------------------------------
@@ -62,37 +91,36 @@ async def _send_email_core(
             file = res.scalars().first()
 
             if not file or not file.stored_path:
-                logger.warning("Attachment ID %s not found or missing path", a)
+                logger.warning("❌ Attachment ID %s not found", a)
                 continue
 
             path = file.stored_path
             filename = file.filename
-
         else:
             path = a.path
             filename = a.filename
 
         if not path.startswith("r2://"):
-            logger.warning("Attachment ignored (not r2): %s", path)
+            logger.warning("❌ Ignored attachment (not r2): %s", path)
             continue
 
-        # r2://bucket/key → bucket, key
-        _, r2_key = path.split("r2://", 1)
-        bucket, key = r2_key.split("/", 1)
-
         try:
+            # r2://bucket/key
+            r2_path = path.replace("r2://", "", 1)
+            bucket, key = r2_path.split("/", 1)
+
             obj = r2.get_object(Bucket=bucket, Key=key)
             file_bytes = obj["Body"].read()
 
             resolved_attachments.append(
                 {
                     "filename": filename,
-                    "content": file_bytes,   # 🔑 ACTUAL BYTES
+                    "content": file_bytes,  # 🔑 REAL BYTES
                 }
             )
 
         except Exception:
-            logger.exception("R2 download failed for %s", path)
+            logger.exception("❌ R2 download failed for %s", path)
 
     logger.info(
         "📧 Sending email → %s | attachments=%d",
@@ -121,13 +149,14 @@ async def _send_email_core(
             )
             await db.commit()
         except Exception:
-            logger.exception("Email sent but logging failed")
+            logger.exception("❌ Email sent but logging failed")
             await db.rollback()
 
     return {
         "status": "ok",
         "sent_to": vendor_email,
-        "attachments": len(resolved_attachments),
+        "requested_attachments": len(attachments),
+        "resolved_attachments": len(resolved_attachments),
     }
 
 
