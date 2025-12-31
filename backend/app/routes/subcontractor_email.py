@@ -24,8 +24,8 @@ def _safe_text(s: str) -> str:
         return ""
     return (
         s.encode("utf-8", "ignore")
-         .decode("utf-8", "ignore")
-         .replace("\x00", "")
+        .decode("utf-8", "ignore")
+        .replace("\x00", "")
     )
 
 
@@ -47,7 +47,7 @@ class SendSubEmailRequest(BaseModel):
 
 
 # -------------------------------------------------------------------
-# CORE EMAIL LOGIC (USED BY API + RETELL)
+# CORE EMAIL LOGIC
 # -------------------------------------------------------------------
 
 async def _send_email_core(
@@ -72,11 +72,15 @@ async def _send_email_core(
             file = res.scalars().first()
 
             if not file:
-                logger.warning("Attachment ID %s not found", a)
+                logger.warning("❌ Attachment ID %s not found", a)
                 continue
 
             if not file.stored_path or not file.stored_path.startswith("r2://"):
-                logger.warning("Attachment %s ignored (not R2)", a)
+                logger.warning(
+                    "❌ Attachment %s ignored (invalid stored_path: %s)",
+                    a,
+                    file.stored_path,
+                )
                 continue
 
             resolved_attachments.append(
@@ -85,35 +89,36 @@ async def _send_email_core(
 
         else:
             if not a.path.startswith("r2://"):
-                logger.warning("Direct attachment ignored (not R2): %s", a.path)
+                logger.warning(
+                    "❌ Direct attachment ignored (not R2): %s", a.path
+                )
                 continue
 
             resolved_attachments.append(
                 {"path": a.path, "filename": a.filename}
             )
 
-    # 🔴 HARD FAIL IF ATTACHMENTS REQUESTED BUT NONE RESOLVED
     if attachments and not resolved_attachments:
-        raise RuntimeError("Attachments requested but none could be resolved from R2")
+        logger.error(
+            "⚠️ Attachments requested but NONE resolved | requested=%s",
+            attachments,
+        )
 
     logger.info(
-        "📧 Sending email → %s | attachments=%d",
+        "📧 Sending email → %s | resolved_attachments=%d",
         vendor_email,
         len(resolved_attachments),
     )
 
     # ---------------- SEND EMAIL ----------------
-    safe_subject = _safe_text(subject)
-    safe_message = _safe_text(message)
-
     send_project_email(
         to_email=vendor_email,
-        subject=safe_subject,
-        body=safe_message,
+        subject=_safe_text(subject),
+        body=_safe_text(message),
         attachments=resolved_attachments,
     )
 
-    # ---------------- SAFE EMAIL LOG ----------------
+    # ---------------- EMAIL LOG ----------------
     if project_request_id:
         try:
             db.add(
@@ -125,28 +130,15 @@ async def _send_email_core(
                 )
             )
             await db.commit()
-
-            logger.info(
-                "📒 Email logged | project=%s | call=%s",
-                project_request_id,
-                related_call_id,
-            )
-
         except Exception:
-            logger.exception(
-                "❌ Email sent BUT log failed | project=%s",
-                project_request_id,
-            )
+            logger.exception("❌ Email sent but log failed")
             await db.rollback()
-    else:
-        logger.warning(
-            "⚠️ Email sent WITHOUT logging (missing project_request_id)"
-        )
 
     return {
         "status": "ok",
         "sent_to": vendor_email,
-        "attachments": len(resolved_attachments),
+        "requested_attachments": len(attachments),
+        "resolved_attachments": len(resolved_attachments),
     }
 
 
