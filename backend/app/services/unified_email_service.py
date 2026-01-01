@@ -14,6 +14,8 @@ SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 FROM_EMAIL = os.getenv("FROM_EMAIL", SMTP_USER)
 
+R2_BUCKET = os.getenv("R2_BUCKET")  # 🔑 already exists
+
 
 def send_project_email(to_email, subject, body, attachments):
     msg = EmailMessage()
@@ -34,10 +36,18 @@ def send_project_email(to_email, subject, body, attachments):
         if not path.startswith("r2://"):
             continue
 
+        # 🔧 NORMALIZE RETELL / BROWSER PATHS
+        # r2://projects/764/x.pdf  → r2://<bucket>/projects/764/x.pdf
+        if path.startswith("r2://projects/"):
+            path = f"r2://{R2_BUCKET}/" + path.replace("r2://", "", 1)
+
         try:
+            # r2://bucket/key → key
             _, rest = path.split("r2://", 1)
             _, key = rest.split("/", 1)
+
             data = download_bytes(key)
+
         except Exception as e:
             logger.error("R2 download failed %s: %s", path, e)
             continue
