@@ -80,7 +80,7 @@ async def perform_search(
         radius="50",
         preferred=[],
         location=data.address or "",
-        db=db,   # ✅ pass injected session through
+        db=db,   # ✅ REQUIRED
     )
 
     # -------------------------
@@ -96,14 +96,14 @@ async def perform_search(
         results = [
             {
                 "name": r.get("name"),
-                "phone": r.get("phone"),
-                "city": r.get("city"),
+                "phone": None,  # ❗ intentional (Yelp later)
+                "city": r.get("city") or r.get("address"),
                 "preferred": False,
                 "same_city": False,
                 "source": "google",
             }
             for r in raw
-            if r.get("phone")
+            if r.get("name")
         ]
 
     # -------------------------
@@ -121,7 +121,7 @@ async def perform_search(
                 project_request_id=data.project_request_id,
                 vendor_name=cleaned["name"],
                 trade=cleaned.get("trade") or trades[0],
-                phone=cleaned["phone"],
+                phone=cleaned.get("phone"),
                 email=cleaned.get("email"),
                 source=cleaned.get("source", "google"),
             )
