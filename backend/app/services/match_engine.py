@@ -1,21 +1,14 @@
-from __future__ import annotations
-
-import logging
-from typing import Any, Dict, List, Optional
-
-from sqlalchemy import select
-
 from .google_scraper import google_search
+from sqlalchemy import select
+from app.db import async_session
 from app.models.search_result import SearchResult
-
-logger = logging.getLogger("match-engine")
 
 
 # --------------------------------------------------
 # UTILS
 # --------------------------------------------------
 
-def clean_bytes(obj: Any) -> Any:
+def clean_bytes(obj):
     """Remove bytes so FastAPI never crashes when encoding JSON."""
     if isinstance(obj, bytes):
         return "<binary>"
@@ -26,68 +19,8 @@ def clean_bytes(obj: Any) -> Any:
     return obj
 
 
-def normalize_city(value: Optional[str]) -> str:
-    """
-    Frontend often sends full address like:
-      '123 main street, San Jose'
-    We only want the city token ('San Jose') for matching/sorting.
-    """
-    if not value:
-        return ""
-    parts = [p.strip() for p in str(value).split(",") if p.strip()]
-    return (parts[-1] if parts else str(value)).strip().lower()
-
-
-def normalize_trades(trades: Any) -> List[str]:
-    """
-    trades may arrive as:
-      - [] / None
-      - "Roofing"
-      - ["Roofing", "HVAC"]
-    """
-    if not trades:
-        return ["General Contractor"]
-    if isinstance(trades, str):
-        return [trades.strip()] if trades.strip() else ["General Contractor"]
-    if isinstance(trades, list):
-        cleaned = [str(t).strip() for t in trades if str(t).strip()]
-        return cleaned if cleaned else ["General Contractor"]
-    return ["General Contractor"]
-
-
-def normalize_preferred(preferred: Any) -> set[str]:
-    if not preferred:
-        return set()
-    if isinstance(preferred, str):
-        return {preferred.strip().lower()} if preferred.strip() else set()
-    if isinstance(preferred, list):
-        return {str(p).strip().lower() for p in preferred if str(p).strip()}
-    return set()
-
-
-def _get_async_sessionmaker():
-    """
-    Your db.py naming has changed over time.
-    This safely finds the async sessionmaker without hard-crashing imports.
-    """
-    import app.db as dbmod
-
-    # Most common names we’ve seen in your codebases
-    for name in (
-        "async_session",          # (older) async_session = async_sessionmaker(...)
-        "async_sessionmaker",     # sometimes exported directly
-        "AsyncSessionLocal",      # common pattern
-        "async_session_maker",
-        "async_session_factory",
-        "SessionLocal",
-    ):
-        if hasattr(dbmod, name):
-            return getattr(dbmod, name)
-
-    raise ImportError(
-        "Could not find async sessionmaker in app.db. "
-        "Expected one of: async_session, AsyncSessionLocal, SessionLocal, async_session_maker, etc."
-    )
+def normalize_city(city: str | None) -> str:
+    return (city or "").strip().lower()
 
 
 # --------------------------------------------------
@@ -96,17 +29,12 @@ def _get_async_sessionmaker():
 
 async def search_subcontractors(trades, radius, preferred, location):
     """
-    Behavior (locked):
-    - Always feels like a live Google search
-    - DB-first learning to reduce API cost
-    - Saves everything discovered
-    - Returns callable vendors only (has phone, not do_not_call)
-    - Sorts: same city first, preferred first
+    Behavior:
+    - Google results are ALWAYS collected & saved (phone or not)
+    - DB is the long-term memory
+    - Callable vendors are preferred, not required
+    - Yelp enrichment can happen later
     """
-
-    trades_list = normalize_trades(trades)
-    preferred_set = normalize_preferred(preferred)
-    job_city = normalize_city(location)
 
     # ---------------------------
     # Radius handling
@@ -114,117 +42,108 @@ async def search_subcontractors(trades, radius, preferred, location):
     try:
         miles = int(str(radius).split()[0])
     except Exception:
-        miles = 50  # default
+        miles = 50
+
     radius_meters = miles * 1609
+    preferred_set = {p.lower() for p in preferred}
+    job_city = normalize_city(location)
 
-    SessionMaker = _get_async_sessionmaker()
+    async with async_session() as db:
 
-    async with SessionMaker() as db:
         # ---------------------------
-        # 1) DB-FIRST LOOKUP
+        # 1️⃣ DB-FIRST LOOKUP
         # ---------------------------
-        db_q = (
+        db_results = await db.execute(
             select(SearchResult)
-            .where(SearchResult.trade.in_(trades_list))
+            .where(SearchResult.trade.in_(trades))
         )
-        db_res = await db.execute(db_q)
-        cached: List[SearchResult] = db_res.scalars().all()
 
+        cached = db_results.scalars().all()
+
+        # callable vendors already known
         callable_cached = [
             v for v in cached
-            if getattr(v, "phone", None) and not getattr(v, "do_not_call", False)
+            if v.phone and not v.do_not_call
         ]
 
-        # If we already have enough callable vendors, skip Google
+        # If DB already has enough vendors, we can skip Google
         use_cache_only = len(callable_cached) >= 6
 
+        google_results = []
+
         # ---------------------------
-        # 2) GOOGLE SEARCH (if needed)
+        # 2️⃣ GOOGLE SEARCH (ALWAYS SAVE)
         # ---------------------------
-        google_results: List[Dict[str, Any]] = []
         if not use_cache_only:
-            # NOTE: google_search can be sync or async depending on your implementation.
-            # Your current version looked sync, so keep it direct.
-            google_results = google_search(trades_list, location, radius_meters) or []
+            google_results = google_search(trades, location, radius_meters)
 
-            # Persist everything (even missing phone) for learning
             for g in google_results:
-                try:
-                    name = (g.get("name") or "").strip()
-                    phone = g.get("phone")
-                    city = normalize_city(g.get("city"))
-                    trade_val = g.get("trade") or (trades_list[0] if trades_list else "General Contractor")
+                name = (g.get("name") or "").strip()
+                city = normalize_city(g.get("city") or g.get("address"))
 
-                    if not name:
-                        continue
+                sr = SearchResult(
+                    name=name,
+                    trade=g.get("trade"),
+                    phone=None,                # phone may come later (Yelp)
+                    city=city,
+                    source="google",
+                )
 
-                    sr = SearchResult(
-                        name=name,
-                        trade=trade_val,
-                        phone=phone,
-                        city=city or None,
-                        source="google",
-                    )
-                    db.add(sr)
-                except Exception:
-                    logger.exception("Failed saving SearchResult row")
+                db.add(sr)
 
-            try:
-                await db.commit()
-            except Exception:
-                logger.exception("DB commit failed for SearchResult saves")
-                await db.rollback()
+            await db.commit()
 
         # ---------------------------
-        # 3) MERGE RESULTS (illusion preserved)
-        #    - If google ran: show google results
-        #    - else: show cached
+        # 3️⃣ MERGE RESULTS (DB + GOOGLE)
         # ---------------------------
-        source_pool: List[Any] = google_results if google_results else callable_cached
+        merged = []
 
-        merged: List[Dict[str, Any]] = []
+        # Combine everything we know
+        source_pool = cached + google_results
+
+        seen = set()
 
         for v in source_pool:
-            # dict from google OR ORM model from db
             if isinstance(v, dict):
-                name = v.get("name") or ""
-                phone = v.get("phone")
-                city = normalize_city(v.get("city"))
+                name = v.get("name")
+                phone = v.get("phone") or v.get("phone_e164")
+                city = normalize_city(v.get("city") or v.get("address"))
             else:
-                name = getattr(v, "name", "") or ""
-                phone = getattr(v, "phone", None)
-                city = normalize_city(getattr(v, "city", None))
+                name = v.name
+                phone = v.phone
+                city = normalize_city(v.city)
 
-            # Allow missing phone at discovery stage
-            merged.append({
-                "name": ...,
-                "phone": phone,  # may be None
-                "city": city,
-                "preferred": ...,
-                "same_city": ...,
-            })
-
-            name_norm = str(name).strip()
-            if not name_norm:
+            if not name:
                 continue
 
+            key = (name.lower(), city)
+            if key in seen:
+                continue
+            seen.add(key)
+
             merged.append({
-                "name": name_norm,
-                "phone": phone,
+                "name": name,
+                "phone": phone,                       # may be None
                 "city": city,
-                "preferred": name_norm.lower() in preferred_set,
-                "same_city": (city == job_city) if job_city else False,
-                "source": "google" if google_results else "cache",
+                "callable": bool(phone),
+                "preferred": name.lower() in preferred_set,
+                "same_city": city == job_city,
+                "source": "google" if isinstance(v, dict) else v.source,
             })
 
-        # ---------------------------
-        # 4) SORT: SAME CITY FIRST, PREFERRED FIRST
-        # ---------------------------
-        merged.sort(key=lambda x: (not x["same_city"], not x["preferred"]))
-
-        logger.info(
-            "search_subcontractors | trades=%s miles=%s job_city=%s cache_only=%s returned=%d",
-            trades_list, miles, job_city, use_cache_only, len(merged)
+    # ---------------------------
+    # 4️⃣ SORT LOGIC
+    # Priority:
+    #   1. Same city
+    #   2. Preferred
+    #   3. Callable (phone present)
+    # ---------------------------
+    merged.sort(
+        key=lambda x: (
+            not x["same_city"],
+            not x["preferred"],
+            not x["callable"],
         )
+    )
 
-        return clean_bytes(merged)
+    return clean_bytes(merged)
