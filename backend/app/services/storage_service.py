@@ -44,6 +44,10 @@ def upload_bytes(
     key: str,
     content_type: str = "application/octet-stream",
 ) -> Tuple[str, int]:
+    """
+    key example:
+      projects/762/<uuid>.pdf
+    """
     s3 = _get_s3_client()
 
     s3.put_object(
@@ -53,7 +57,8 @@ def upload_bytes(
         ContentType=content_type,
     )
 
-    return f"r2://{R2_BUCKET}/projects/{project_id}/{key}"
+    # ✅ canonical path
+    return f"r2://{R2_BUCKET}/{key}", len(data)
 
 
 # --------------------------------------------------
