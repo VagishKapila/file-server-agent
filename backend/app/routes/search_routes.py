@@ -80,6 +80,7 @@ async def perform_search(
         radius="50",
         preferred=[],
         location=data.address or "",
+        db=db,   # ✅ pass injected session through
     )
 
     # -------------------------
