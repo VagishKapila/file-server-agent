@@ -11,7 +11,6 @@ from app.models.search_result import SearchResult
 # --------------------------------------------------
 
 def clean_bytes(obj):
-    """Remove bytes so FastAPI never crashes when encoding JSON."""
     if isinstance(obj, bytes):
         return "<binary>"
     if isinstance(obj, dict):
@@ -34,14 +33,13 @@ async def search_subcontractors(
     radius,
     preferred,
     location,
-    db: AsyncSession,   # ✅ injected session
+    db: AsyncSession,
 ):
     """
     Behavior:
     - Google results are ALWAYS collected & saved (phone or not)
     - DB is the long-term memory
     - Callable vendors are preferred, not required
-    - Yelp enrichment can happen later
     """
 
     # ---------------------------
@@ -65,9 +63,10 @@ async def search_subcontractors(
 
     cached = db_results.scalars().all()
 
+    # ✅ SAFE: do NOT assume do_not_call exists
     callable_cached = [
         v for v in cached
-        if v.phone and not v.do_not_call
+        if v.phone
     ]
 
     use_cache_only = len(callable_cached) >= 6
@@ -88,9 +87,9 @@ async def search_subcontractors(
 
             db.add(
                 SearchResult(
-                    name=name,
+                    vendor_name=name,
                     trade=g.get("trade"),
-                    phone=None,           # Yelp later
+                    phone=None,   # Yelp later
                     city=city,
                     source="google",
                 )
@@ -112,7 +111,7 @@ async def search_subcontractors(
             city = normalize_city(v.get("city") or v.get("address"))
             source = "google"
         else:
-            name = v.name
+            name = v.vendor_name
             phone = v.phone
             city = normalize_city(v.city)
             source = v.source
