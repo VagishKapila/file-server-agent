@@ -195,9 +195,14 @@ async def search_subcontractors(trades, radius, preferred, location):
                 phone = getattr(v, "phone", None)
                 city = normalize_city(getattr(v, "city", None))
 
-            # callable only
-            if not phone:
-                continue
+            # Allow missing phone at discovery stage
+            merged.append({
+                "name": ...,
+                "phone": phone,  # may be None
+                "city": city,
+                "preferred": ...,
+                "same_city": ...,
+            })
 
             name_norm = str(name).strip()
             if not name_norm:
