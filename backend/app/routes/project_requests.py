@@ -1,16 +1,24 @@
-from fastapi import APIRouter, Depends, Body
-from typing import List
+from fastapi import APIRouter, Depends, Body, Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Dict
 
 from app.db import get_db
 from app.models.project import ProjectRequest
 
-router = APIRouter(prefix="/project-requests", tags=["Project Requests"])
+router = APIRouter(
+    prefix="/project-requests",
+    tags=["Project Requests"]
+)
 
+# ✅ Preflight handler
+@router.options("/{path:path}")
+async def options_handler(path: str):
+    return Response(status_code=200)
 
+# ✅ Create project
 @router.post("/", status_code=200)
 async def create_project_request(
-    payload: dict = Body(...),
+    payload: Dict = Body(...),
     db: AsyncSession = Depends(get_db),
 ):
     pr = ProjectRequest(
