@@ -53,7 +53,7 @@ def upload_bytes(
         ContentType=content_type,
     )
 
-    return f"r2://{R2_BUCKET}/{key}", len(data)
+    return f"r2://{R2_BUCKET}/projects/{project_id}/{key}"
 
 
 # --------------------------------------------------
