@@ -23,6 +23,26 @@ def normalize_city(city: str | None) -> str:
     return (city or "").strip().lower()
 
 
+def normalize_trades(trades):
+    """
+    Frontend may send:
+    - []
+    - ["Roofing"]
+    - "Roofing"
+    - None
+    """
+    if not trades:
+        return ["General Contractor"]
+
+    if isinstance(trades, str):
+        return [trades]
+
+    if isinstance(trades, list) and len(trades) > 0:
+        return trades
+
+    return ["General Contractor"]
+
+
 # --------------------------------------------------
 # MAIN SEARCH ENGINE
 # --------------------------------------------------
@@ -37,19 +57,28 @@ async def search_subcontractors(trades, radius, preferred, location):
     """
 
     # ---------------------------
+    # 🔒 INPUT NORMALIZATION (CRITICAL)
+    # ---------------------------
+    trades = normalize_trades(trades)
+    preferred = preferred or []
+
+    if not location or not location.strip():
+        location = "San Jose, CA"
+
+    job_city = normalize_city(location)
+    preferred_set = {p.lower() for p in preferred}
+
+    # ---------------------------
     # Radius handling
     # ---------------------------
     try:
         miles = int(str(radius).split()[0])
     except Exception:
-        miles = 50  # sensible default
+        miles = 50  # default
 
     radius_meters = miles * 1609
 
-    preferred_set = {p.lower() for p in preferred}
-    job_city = normalize_city(location)
-
-    results = []
+    merged = []
 
     async with async_session() as db:
 
@@ -64,13 +93,11 @@ async def search_subcontractors(trades, radius, preferred, location):
 
         cached = db_results.scalars().all()
 
-        # callable vendors in DB
         callable_cached = [
             v for v in cached
             if v.phone and not v.do_not_call
         ]
 
-        # If we already have enough vendors, skip Google
         use_cache_only = len(callable_cached) >= 6
 
         # ---------------------------
@@ -95,39 +122,39 @@ async def search_subcontractors(trades, radius, preferred, location):
                 )
 
                 db.add(sr)
-                results.append(g)
 
             await db.commit()
 
         # ---------------------------
         # 3️⃣ MERGE RESULTS (illusion preserved)
         # ---------------------------
-        merged = []
-
         source_pool = google_results if google_results else cached
 
         for v in source_pool:
-            phone = v.get("phone") if isinstance(v, dict) else v.phone
-            city = normalize_city(v.get("city") if isinstance(v, dict) else v.city)
+            is_dict = isinstance(v, dict)
 
+            phone = v.get("phone") if is_dict else v.phone
             if not phone:
                 continue
 
+            city = normalize_city(v.get("city") if is_dict else v.city)
+            name = v.get("name") if is_dict else v.name
+
             merged.append({
-                "name": v.get("name") if isinstance(v, dict) else v.name,
+                "name": name,
                 "phone": phone,
                 "city": city,
-                "preferred": (v.get("name") or "").lower() in preferred_set,
+                "preferred": name.lower() in preferred_set,
                 "same_city": city == job_city,
             })
 
     # ---------------------------
-    # 4️⃣ SORT: SAME CITY FIRST
+    # 4️⃣ SORT: SAME CITY + PREFERRED FIRST
     # ---------------------------
     merged.sort(
         key=lambda x: (
             not x["same_city"],
-            not x["preferred"]
+            not x["preferred"],
         )
     )
 
