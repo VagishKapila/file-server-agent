@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, Body, Response
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict
+from typing import Dict, Any
 
 from app.db import get_db
 from app.models.project import ProjectRequest
@@ -10,19 +10,30 @@ router = APIRouter(
     tags=["Project Requests"]
 )
 
-# ✅ Preflight handler
-@router.options("/{path:path}")
-async def options_handler(path: str):
-    return Response(status_code=200)
-
-# ✅ Create project
 @router.post("/", status_code=200)
 async def create_project_request(
-    payload: Dict = Body(...),
+    payload: Dict[str, Any] = Body(...),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Creates a new ProjectRequest row.
+
+    Expected payload (minimum):
+      {
+        "project_name": "My Project",
+        "location": "San Jose, CA",
+        "request_type": "sub"   # optional
+      }
+    """
+
+    project_name = payload.get("project_name")
+    if not project_name:
+        # Keep it simple; frontend should always send project_name
+        # but this prevents silent crashes.
+        return {"error": "project_name is required"}
+
     pr = ProjectRequest(
-        project_name=payload["project_name"],
+        project_name=project_name,
         location=payload.get("location"),
         request_type=payload.get("request_type", "sub"),
     )
