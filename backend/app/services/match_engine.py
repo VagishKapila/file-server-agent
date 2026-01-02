@@ -37,7 +37,7 @@ async def search_subcontractors(
 ):
     """
     Behavior:
-    - Google results are ALWAYS collected & saved (phone or not)
+    - Google results are ALWAYS collected & saved
     - DB is the long-term memory
     - Callable vendors are preferred, not required
     """
@@ -63,10 +63,9 @@ async def search_subcontractors(
 
     cached = db_results.scalars().all()
 
-    # ✅ SAFE: do NOT assume do_not_call exists
+    # ✅ SAFE: no do_not_call in schema
     callable_cached = [
-        v for v in cached
-        if v.phone
+        v for v in cached if v.phone
     ]
 
     use_cache_only = len(callable_cached) >= 6
@@ -80,8 +79,6 @@ async def search_subcontractors(
 
         for g in google_results:
             name = (g.get("name") or "").strip()
-            city = normalize_city(g.get("city") or g.get("address"))
-
             if not name:
                 continue
 
@@ -89,8 +86,7 @@ async def search_subcontractors(
                 SearchResult(
                     vendor_name=name,
                     trade=g.get("trade"),
-                    phone=None,   # Yelp later
-                    city=city,
+                    phone=None,
                     source="google",
                 )
             )
@@ -113,7 +109,7 @@ async def search_subcontractors(
         else:
             name = v.vendor_name
             phone = v.phone
-            city = normalize_city(v.city)
+            city = ""          # ✅ SAFE: column does not exist
             source = v.source
 
         if not name:
@@ -130,7 +126,7 @@ async def search_subcontractors(
             "city": city,
             "callable": bool(phone),
             "preferred": name.lower() in preferred_set,
-            "same_city": city == job_city,
+            "same_city": city == job_city if city else False,
             "source": source,
         })
 
