@@ -134,7 +134,7 @@ async def autodial_start(
                 )
             continue
 
-        phone = vendor.get("phone_e164")
+        phone = vendor.get("phone_e164") or vendor.get("phone")
         if not phone:
             if debug:
                 logger.warning(
