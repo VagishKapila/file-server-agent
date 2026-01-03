@@ -10,3 +10,5 @@ aiofiles>=23.2.1
 requests
 boto3
 botocore
+requests
+phonenumbers
