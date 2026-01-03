@@ -4,6 +4,7 @@ import requests
 GOOGLE_API_KEY = (
     os.getenv("GOOGLE_API_KEY")
     or os.getenv("GOOGLE_MAPS_API_KEY")
+    or os.getenv("GOOGLE_PLACES_API_KEY")
 )
 
 if not GOOGLE_API_KEY:
@@ -30,31 +31,36 @@ def google_places_text_search(trade: str, location: str):
     results = []
 
     for place in data.get("results", []):
-        place_id = place.get("place_id")
-        phone = None
-
-        if place_id:
-            d = requests.get(
-                DETAILS_URL,
-                params={
-                    "place_id": place_id,
-                    "fields": "formatted_phone_number",
-                    "key": GOOGLE_API_KEY,
-                },
-                timeout=10,
-            ).json()
-
-            phone = (
-                d.get("result", {})
-                .get("formatted_phone_number")
-            )
-
         results.append({
+            "place_id": place.get("place_id"),
             "name": place.get("name"),
             "address": place.get("formatted_address"),
             "trade": trade,
-            "phone": phone,
             "source": "google",
         })
 
     return results
+
+
+def google_place_details(place_id: str):
+    if not place_id:
+        return {}
+
+    r = requests.get(
+        DETAILS_URL,
+        params={
+            "place_id": place_id,
+            "fields": "formatted_phone_number,website",
+            "key": GOOGLE_API_KEY,
+        },
+        timeout=10,
+    )
+
+    if r.status_code != 200:
+        return {}
+
+    data = r.json().get("result", {})
+    return {
+        "phone": data.get("formatted_phone_number"),
+        "website": data.get("website"),
+    }
