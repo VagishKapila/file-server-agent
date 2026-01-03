@@ -4,7 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from ..services.match_engine import search_subcontractors
-from ..services.google_scraper import google_search
 from ..db import get_db
 from ..models.activity_log import ActivityLog
 from ..models.search_result import SearchResult
@@ -91,28 +90,6 @@ async def perform_search(
         db=db,   # ✅ REQUIRED
     )
 
-    # -------------------------
-    # 3) HARD GUARANTEE: Google fallback
-    # -------------------------
-    if not results:
-        raw = google_search(
-            trades=trades,
-            location=data.address or "",
-            radius_meters=80467,  # ~50 miles
-        )
-
-        results = [
-            {
-                "name": r.get("name"),
-                "phone": None,  # ❗ intentional (Yelp later)
-                "city": r.get("city") or r.get("address"),
-                "preferred": False,
-                "same_city": False,
-                "source": "google",
-            }
-            for r in raw
-            if r.get("name")
-        ]
 
     # -------------------------
     # 4) Persist CLEAN results
@@ -132,6 +109,7 @@ async def perform_search(
                 phone=cleaned.get("phone"),
                 email=cleaned.get("email"),
                 source=cleaned.get("source", "google"),
+                callable=bool(cleaned.get("phone")),  # 🔑 ADD THIS
             )
         )
         saved += 1
