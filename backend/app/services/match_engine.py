@@ -36,10 +36,10 @@ async def search_subcontractors(
     db: AsyncSession,
 ):
     """
-    Behavior:
-    - Google results are ALWAYS collected & saved
-    - DB is the long-term memory
-    - Callable vendors are preferred, not required
+    Behavior (RESTORED, SAFE):
+    - DB is READ-ONLY memory
+    - Google is discovery only
+    - ALL persistence handled by routes/search_routes.py
     """
 
     # ---------------------------
@@ -55,62 +55,36 @@ async def search_subcontractors(
     job_city = normalize_city(location)
 
     # ---------------------------
-    # 1️⃣ DB-FIRST LOOKUP
+    # 1️⃣ DB-FIRST LOOKUP (READ ONLY)
     # ---------------------------
     db_results = await db.execute(
         select(SearchResult).where(SearchResult.trade.in_(trades))
     )
-
     cached = db_results.scalars().all()
 
-    # ✅ SAFE: no do_not_call in schema
-    callable_cached = [
-        v for v in cached if v.phone
-    ]
-
+    callable_cached = [v for v in cached if v.phone]
     use_cache_only = len(callable_cached) >= 6
+
     google_results = []
 
     # ---------------------------
-    # 2️⃣ GOOGLE SEARCH (ALWAYS SAVE)
+    # 2️⃣ GOOGLE SEARCH (NO DB WRITE)
     # ---------------------------
     if not use_cache_only:
         google_results = google_search(trades, location, radius_meters)
-
-        for g in google_results:
-            name = (g.get("name") or "").strip()
-            if not name:
-                continue
-
-            db.add(
-                SearchResult(
-                    vendor_name=name,
-                    trade=g.get("trade"),
-                    phone=None,
-                    source="google",
-                )
-            )
-
-        await db.commit()
 
     # ---------------------------
     # 3️⃣ MERGE RESULTS
     # ---------------------------
     merged = []
-    source_pool = cached + google_results
     seen = set()
 
-    for v in source_pool:
-        if isinstance(v, dict):
-            name = v.get("name")
-            phone = v.get("phone") or v.get("phone_e164")
-            city = normalize_city(v.get("city") or v.get("address"))
-            source = "google"
-        else:
-            name = v.vendor_name
-            phone = v.phone
-            city = ""          # ✅ SAFE: column does not exist
-            source = v.source
+    # normalize cached DB rows
+    for v in cached:
+        name = v.vendor_name
+        phone = v.phone
+        city = ""
+        source = v.source or "db"
 
         if not name:
             continue
@@ -126,8 +100,32 @@ async def search_subcontractors(
             "city": city,
             "callable": bool(phone),
             "preferred": name.lower() in preferred_set,
-            "same_city": city == job_city if city else False,
+            "same_city": False,
             "source": source,
+        })
+
+    # normalize google dict results
+    for g in google_results:
+        name = (g.get("name") or "").strip()
+        if not name:
+            continue
+
+        city = normalize_city(g.get("city") or g.get("address"))
+        phone = g.get("phone") or g.get("phone_e164")
+
+        key = (name.lower(), city)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        merged.append({
+            "name": name,
+            "phone": phone,
+            "city": city,
+            "callable": bool(phone),
+            "preferred": name.lower() in preferred_set,
+            "same_city": city == job_city if city else False,
+            "source": "google",
         })
 
     # ---------------------------
