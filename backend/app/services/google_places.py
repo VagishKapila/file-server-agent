@@ -1,66 +1,75 @@
+# app/services/google_places.py
+
 import os
 import requests
+from typing import Dict, Optional
 
-GOOGLE_API_KEY = (
-    os.getenv("GOOGLE_API_KEY")
+GOOGLE_PLACES_API_KEY = (
+    os.getenv("GOOGLE_PLACES_API_KEY")
     or os.getenv("GOOGLE_MAPS_API_KEY")
-    or os.getenv("GOOGLE_PLACES_API_KEY")
 )
 
-if not GOOGLE_API_KEY:
-    raise RuntimeError("GOOGLE_API_KEY not set")
+if not GOOGLE_PLACES_API_KEY:
+    raise RuntimeError("GOOGLE_PLACES_API_KEY not set")
 
 TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
 
-def google_places_text_search(trade: str, location: str):
+def google_places_text_search(trade: str, location: str, radius_meters: int = 40000):
+    """
+    Returns raw places with place_id (NO phone here)
+    """
+    query = f"{trade} contractor"
+
     params = {
-        "query": f"{trade} contractor",
+        "query": query,
         "location": location,
-        "key": GOOGLE_API_KEY,
+        "radius": radius_meters,
+        "key": GOOGLE_PLACES_API_KEY,
     }
 
-    r = requests.get(TEXT_SEARCH_URL, params=params, timeout=10)
-    r.raise_for_status()
+    res = requests.get(TEXT_SEARCH_URL, params=params, timeout=15).json()
 
-    data = r.json()
-    if data.get("status") != "OK":
+    if res.get("status") != "OK":
         return []
 
     results = []
 
-    for place in data.get("results", []):
+    for p in res.get("results", []):
         results.append({
-            "place_id": place.get("place_id"),
-            "name": place.get("name"),
-            "address": place.get("formatted_address"),
-            "trade": trade,
+            "name": p.get("name"),
+            "address": p.get("formatted_address"),
+            "place_id": p.get("place_id"),
+            "rating": p.get("rating"),
+            "reviews": p.get("user_ratings_total"),
             "source": "google",
         })
 
     return results
 
 
-def google_place_details(place_id: str):
-    if not place_id:
-        return {}
+def google_place_details(place_id: str) -> Optional[Dict]:
+    """
+    Fetch phone + website from Place Details
+    """
+    params = {
+        "place_id": place_id,
+        "fields": "formatted_phone_number,international_phone_number,website",
+        "key": GOOGLE_PLACES_API_KEY,
+    }
 
-    r = requests.get(
-        DETAILS_URL,
-        params={
-            "place_id": place_id,
-            "fields": "formatted_phone_number,website",
-            "key": GOOGLE_API_KEY,
-        },
-        timeout=10,
-    )
+    res = requests.get(DETAILS_URL, params=params, timeout=15).json()
 
-    if r.status_code != 200:
-        return {}
+    if res.get("status") != "OK":
+        return None
 
-    data = r.json().get("result", {})
+    result = res.get("result", {})
+
     return {
-        "phone": data.get("formatted_phone_number"),
-        "website": data.get("website"),
+        "phone": (
+            result.get("international_phone_number")
+            or result.get("formatted_phone_number")
+        ),
+        "website": result.get("website"),
     }
