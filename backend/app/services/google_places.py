@@ -3,6 +3,9 @@
 import os
 import requests
 from typing import Dict, Optional
+import time
+
+GOOGLE_DETAILS_SLEEP = 0.12  # ~8 req/sec safe
 
 GOOGLE_PLACES_API_KEY = (
     os.getenv("GOOGLE_PLACES_API_KEY")
@@ -16,9 +19,15 @@ TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
 
-def google_places_text_search(trade: str, location: str, radius_meters: int = 40000):
+def google_places_text_search(
+    trade: str,
+    location: str,
+    radius_meters: int = 40000,
+):
     """
-    Returns raw places with place_id (NO phone here)
+    Google Places Text Search
+    - Returns name + place_id
+    - NO phone here by design
     """
     query = f"{trade} contractor"
 
@@ -37,21 +46,24 @@ def google_places_text_search(trade: str, location: str, radius_meters: int = 40
     results = []
 
     for p in res.get("results", []):
-        results.append({
-            "name": p.get("name"),
-            "address": p.get("formatted_address"),
-            "place_id": p.get("place_id"),
-            "rating": p.get("rating"),
-            "reviews": p.get("user_ratings_total"),
-            "source": "google",
-        })
+        results.append(
+            {
+                "name": p.get("name"),
+                "formatted_address": p.get("formatted_address"),
+                "place_id": p.get("place_id"),
+                "rating": p.get("rating"),
+                "reviews": p.get("user_ratings_total"),
+                "source": "google",
+            }
+        )
 
     return results
 
 
 def google_place_details(place_id: str) -> Optional[Dict]:
     """
-    Fetch phone + website from Place Details
+    Google Place Details
+    - Returns RAW Google keys (important)
     """
     params = {
         "place_id": place_id,
@@ -59,17 +71,12 @@ def google_place_details(place_id: str) -> Optional[Dict]:
         "key": GOOGLE_PLACES_API_KEY,
     }
 
+    time.sleep(GOOGLE_DETAILS_SLEEP)
+
     res = requests.get(DETAILS_URL, params=params, timeout=15).json()
 
     if res.get("status") != "OK":
         return None
 
-    result = res.get("result", {})
-
-    return {
-        "phone": (
-            result.get("international_phone_number")
-            or result.get("formatted_phone_number")
-        ),
-        "website": result.get("website"),
-    }
+    # IMPORTANT: keep Google’s original field names
+    return res.get("result", {})
