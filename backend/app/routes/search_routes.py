@@ -35,6 +35,13 @@ async def perform_search(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    
+    # HARD GUARD — must be first
+    if not data.project_request_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_request_id is required"
+        )
     # -------------------------
     # 0) Ensure project exists
     # -------------------------
@@ -57,13 +64,6 @@ async def perform_search(
             },
         )
         await db.commit()
-
-    # HARD GUARD — must be first
-    if not data.project_request_id:
-        raise HTTPException(
-            status_code=400,
-            detail="project_request_id is required"
-        )
 
     # -------------------------
     # 1) Normalize trades
