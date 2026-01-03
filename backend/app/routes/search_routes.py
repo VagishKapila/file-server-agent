@@ -10,6 +10,7 @@ from ..models.activity_log import ActivityLog
 from ..models.search_result import SearchResult
 from .activity import log_activity
 from app.utils.vendor_guard import clean_vendor_result
+from fastapi import HTTPException
 
 router = APIRouter()
 
@@ -56,6 +57,13 @@ async def perform_search(
             },
         )
         await db.commit()
+
+    # HARD GUARD — must be first
+    if not data.project_request_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_request_id is required"
+        )
 
     # -------------------------
     # 1) Normalize trades
