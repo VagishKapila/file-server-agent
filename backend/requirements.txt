@@ -29,3 +29,5 @@ requests
 boto3
 botocore
 httpx>=0.25.0
+requests
+phonenumbers
