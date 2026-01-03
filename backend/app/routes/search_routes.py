@@ -34,6 +34,16 @@ async def perform_search(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    
+
+    # -------------------------
+    # HARD GUARD: project_request_id must exist
+    # -------------------------
+    if not data.project_request_id:
+        raise HTTPException(
+            status_code=400,
+            detail="project_request_id is required for search"
+        )
     # -------------------------
     # 0) Ensure project exists
     # -------------------------
