@@ -1,40 +1,60 @@
 import os
 import requests
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_API_KEY = (
+    os.getenv("GOOGLE_API_KEY")
+    or os.getenv("GOOGLE_MAPS_API_KEY")
+)
+
+if not GOOGLE_API_KEY:
+    raise RuntimeError("GOOGLE_API_KEY not set")
 
 TEXT_SEARCH_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json"
 
 
-def google_places_text_search(query: str, location: str):
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY not set")
-
+def google_places_text_search(trade: str, location: str):
     params = {
-        "query": f"{query} contractor in {location}",
+        "query": f"{trade} contractor",
+        "location": location,
         "key": GOOGLE_API_KEY,
     }
 
-    resp = requests.get(TEXT_SEARCH_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
+    r = requests.get(TEXT_SEARCH_URL, params=params, timeout=10)
+    r.raise_for_status()
 
-    return data.get("results", [])
+    data = r.json()
+    if data.get("status") != "OK":
+        return []
 
+    results = []
 
-def google_place_details(place_id: str):
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY not set")
+    for place in data.get("results", []):
+        place_id = place.get("place_id")
+        phone = None
 
-    params = {
-        "place_id": place_id,
-        "fields": "name,formatted_phone_number,international_phone_number,website",
-        "key": GOOGLE_API_KEY,
-    }
+        if place_id:
+            d = requests.get(
+                DETAILS_URL,
+                params={
+                    "place_id": place_id,
+                    "fields": "formatted_phone_number",
+                    "key": GOOGLE_API_KEY,
+                },
+                timeout=10,
+            ).json()
 
-    resp = requests.get(DETAILS_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
+            phone = (
+                d.get("result", {})
+                .get("formatted_phone_number")
+            )
 
-    return data.get("result", {})
+        results.append({
+            "name": place.get("name"),
+            "address": place.get("formatted_address"),
+            "trade": trade,
+            "phone": phone,
+            "source": "google",
+        })
+
+    return results

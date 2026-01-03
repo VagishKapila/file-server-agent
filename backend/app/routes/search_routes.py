@@ -1,22 +1,20 @@
-from fastapi import APIRouter, Depends
+# app/routes/search_routes.py
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from ..services.match_engine import search_subcontractors
-from ..db import get_db
-from ..models.activity_log import ActivityLog
-from ..models.search_result import SearchResult
-from .activity import log_activity
+from app.services.match_engine import search_subcontractors
+from app.db import get_db
+from app.models.activity_log import ActivityLog
+from app.models.search_result import SearchResult
+from app.routes.activity import log_activity
 from app.utils.vendor_guard import clean_vendor_result
-from fastapi import HTTPException
 
-router = APIRouter()
+router = APIRouter(tags=["search"])
 
 
-# =========================
-# Request schema
-# =========================
 class SearchRequest(BaseModel):
     project_request_id: int
     category: str | None = None
@@ -26,24 +24,15 @@ class SearchRequest(BaseModel):
     email: str | None = None
 
 
-# =========================
-# Search endpoint
-# =========================
 @router.post("/search")
 async def perform_search(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    
-    # HARD GUARD — must be first
     if not data.project_request_id:
-        raise HTTPException(
-            status_code=400,
-            detail="project_request_id is required"
-        )
-    # -------------------------
-    # 0) Ensure project exists
-    # -------------------------
+        raise HTTPException(status_code=400, detail="project_request_id is required")
+
+    # ensure project exists
     result = await db.execute(
         text("SELECT id FROM project_requests WHERE id = :id"),
         {"id": data.project_request_id},
@@ -54,8 +43,8 @@ async def perform_search(
             text("""
                 INSERT INTO project_requests (id, project_name, location, request_type)
                 VALUES (:id, :name, :location, :type)
-                """),
-                {
+            """),
+            {
                 "id": data.project_request_id,
                 "name": "Auto-created from contractor search",
                 "location": data.address or "Unknown",
@@ -64,38 +53,27 @@ async def perform_search(
         )
         await db.commit()
 
-    # -------------------------
-    # 1) Normalize trades
-    # -------------------------
+    # normalize trades
     trades: list[str] = []
-
     if data.category and data.category.strip():
         trades.append(data.category.strip())
-
     for tag in data.tags:
         if tag and tag.strip():
             trades.append(tag.strip())
-
     if not trades:
         trades = ["General Contractor"]
 
-    # -------------------------
-    # 2) Primary search engine
-    # -------------------------
+    # run engine
     results = await search_subcontractors(
         trades=trades,
-        radius="50",
+        radius="25",
         preferred=[],
         location=data.address or "",
-        db=db,   # ✅ REQUIRED
+        db=db,
     )
 
-
-    # -------------------------
-    # 4) Persist CLEAN results
-    # -------------------------
+    # persist
     saved = 0
-
     for r in results:
         cleaned = clean_vendor_result(r)
         if not cleaned:
@@ -109,14 +87,11 @@ async def perform_search(
                 phone=cleaned.get("phone"),
                 email=cleaned.get("email"),
                 source=cleaned.get("source", "google"),
-                callable=bool(cleaned.get("phone")),  # 🔑 ADD THIS
+                callable=bool(cleaned.get("phone")),
             )
         )
         saved += 1
 
-    # -------------------------
-    # 5) Activity log
-    # -------------------------
     db.add(
         ActivityLog(
             user_id="demo-user",
@@ -125,7 +100,6 @@ async def perform_search(
             payload={
                 "trade": trades,
                 "address": data.address,
-                "raw_results": len(results),
                 "saved_results": saved,
             },
         )
@@ -133,18 +107,12 @@ async def perform_search(
 
     await db.commit()
 
-    # -------------------------
-    # 6) Async feed
-    # -------------------------
     await log_activity(
         {
             "user_id": "demo-user",
             "project_id": str(data.project_request_id),
             "action": "contractor_search",
-            "payload": {
-                "trade": trades,
-                "saved_results": saved,
-            },
+            "payload": {"trade": trades, "saved_results": saved},
         },
         db,
     )
