@@ -1,12 +1,10 @@
-# EOF: backend/app/routes/search_routes.py
+# EOF: backend/app/routes/search.py
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import time
-import re
-
 from app.db import get_db
 from app.models.search_result import SearchResult
 from app.services.match_engine import search_subcontractors
@@ -29,39 +27,6 @@ class SearchRequest(BaseModel):
 
 
 # =========================
-# CITY NORMALIZATION (robust, human-proof)
-# =========================
-def extract_city(address: str | None) -> str | None:
-    """
-    Attempts to extract a usable city token from messy human input.
-    Works for:
-    - Full addresses
-    - City, State
-    - No commas
-    - Extra words
-    """
-    if not address:
-        return None
-
-    addr = address.lower().strip()
-
-    # Remove zip codes
-    addr = re.sub(r"\b\d{5}(-\d{4})?\b", "", addr)
-
-    # Split by commas first
-    parts = [p.strip() for p in addr.split(",") if p.strip()]
-    if len(parts) >= 2:
-        return parts[-2]  # usually city before state
-
-    # Fallback: split by spaces and take last meaningful token
-    tokens = [t for t in addr.split() if len(t) > 2]
-    if tokens:
-        return tokens[-1]
-
-    return None
-
-
-# =========================
 # Search endpoint
 # =========================
 @router.post("/search")
@@ -71,137 +36,18 @@ async def perform_search(
 ):
     t0 = time.time()
 
+    # -------------------------
+    # 0) HARD GUARD
+    # -------------------------
     project_request_id = data.project_request_id or data.project_id
     if not project_request_id:
         raise HTTPException(status_code=400, detail="project_request_id is required")
 
-    # Normalize trade
-    trades: list[str] = []
-    if data.category and data.category.strip():
-        trades.append(data.category.strip())
-    for tag in data.tags:
-        if tag and tag.strip():
-            trades.append(tag.strip())
-    if not trades:
-        trades = ["General Contractor"]
-
-    trade = trades[0]
-    city = extract_city(data.address)
-
-    # -------------------------------------------------
-    # 1) SMART DB CACHE (city + trade + score)
-    # -------------------------------------------------
-    if city:
-        cached = await db.execute(
-            text("""
-                SELECT
-                    sr.id,
-                    sr.vendor_name,
-                    sr.trade,
-                    sr.phone,
-                    sr.email,
-                    sr.source,
-                    COALESCE(vs.score, 0) AS score
-                FROM search_results sr
-                LEFT JOIN vendor_scores vs
-                  ON vs.vendor_phone = sr.phone
-                 AND vs.trade = sr.trade
-                 AND vs.city = :city
-                WHERE sr.trade = :trade
-                  AND sr.phone IS NOT NULL
-                ORDER BY
-                  COALESCE(vs.score, 0) DESC,
-                  sr.id DESC
-                LIMIT 20
-            """),
-            {
-                "city": city,
-                "trade": trade,
-            },
-        )
-
-        rows = cached.fetchall()
-        if rows:
-            return {
-                "status": "ok",
-                "project_request_id": project_request_id,
-                "vendors": [
-                    {
-                        "id": r.id,
-                        "vendor_name": r.vendor_name,
-                        "trade": r.trade,
-                        "phone": r.phone,
-                        "email": r.email,
-                        "source": r.source,
-                        "score": float(r.score),
-                    }
-                    for r in rows
-                ],
-                "cache_mode": "city_score_ranked",
-                "duration_ms": int((time.time() - t0) * 1000),
-            }
-
-    # -------------------------------------------------
-    # 2) SLOW PATH (FIRST-TIME CITY DISCOVERY ONLY)
-    # Google / Yelp hit happens HERE
-    # -------------------------------------------------
-    results = await search_subcontractors(
-        trades=[trade],
-        radius="25",
-        preferred=[],
-        location=data.address or "",
-        db=db,
-    )
-
-    results = results[:5]  # UI-first, speed-first
-
-    saved = 0
-
-    for r in results:
-        cleaned = clean_vendor_result(r)
-        if not cleaned or not cleaned.get("phone"):
-            continue
-
-        try:
-            sr = SearchResult(
-                project_request_id=project_request_id,
-                vendor_name=cleaned["name"],
-                trade=trade,
-                phone=cleaned.get("phone"),
-                email=cleaned.get("email"),
-                source=cleaned.get("source", "google"),
-            )
-            db.add(sr)
-            saved += 1
-
-            # Initialize vendor score row if missing
-            if city:
-                await db.execute(
-                    text("""
-                        INSERT INTO vendor_scores
-                          (vendor_phone, vendor_name, trade, city, score)
-                        VALUES
-                          (:phone, :name, :trade, :city, 0)
-                        ON CONFLICT (vendor_phone, trade, city)
-                        DO NOTHING
-                    """),
-                    {
-                        "phone": cleaned.get("phone"),
-                        "name": cleaned["name"],
-                        "trade": trade,
-                        "city": city,
-                    },
-                )
-
-        except Exception:
-            continue
-
-    await db.commit()
-
-    # -------------------------------------------------
-    # 3) RETURN WHAT WE JUST SAVED (UI NEEDS IT NOW)
-    # -------------------------------------------------
-    rows2 = await db.execute(
+    # -------------------------
+    # 1) HARD CACHE RETURN (NO DISCOVERY)
+    # ranked by intelligence first
+    # -------------------------
+    cached = await db.execute(
         text("""
             SELECT
                 sr.id,
@@ -210,40 +56,157 @@ async def perform_search(
                 sr.phone,
                 sr.email,
                 sr.source,
-                COALESCE(vs.score, 0) AS score
+                COALESCE(vs.success_score, 0) AS success_score,
+                COALESCE(vs.accepted_jobs, 0) AS accepted_jobs
             FROM search_results sr
             LEFT JOIN vendor_scores vs
-              ON vs.vendor_phone = sr.phone
-             AND vs.trade = sr.trade
-             AND vs.city = :city
+                ON vs.phone = sr.phone
             WHERE sr.project_request_id = :pid
-            ORDER BY score DESC, sr.id DESC
-            LIMIT 20
+            ORDER BY
+                COALESCE(vs.success_score, 0) DESC,
+                COALESCE(vs.accepted_jobs, 0) DESC,
+                sr.id DESC
+            LIMIT 50
         """),
-        {
-            "pid": project_request_id,
-            "city": city,
-        },
+        {"pid": project_request_id},
     )
 
-    vendors = [
-        {
-            "id": r.id,
-            "vendor_name": r.vendor_name,
-            "trade": r.trade,
-            "phone": r.phone,
-            "email": r.email,
-            "source": r.source,
-            "score": float(r.score),
+    rows = cached.fetchall()
+    if rows:
+        return {
+            "status": "ok",
+            "project_request_id": project_request_id,
+            "cached": True,
+            "vendors": [
+                {
+                    "id": r.id,
+                    "vendor_name": r.vendor_name,
+                    "trade": r.trade,
+                    "phone": r.phone,
+                    "email": r.email,
+                    "source": r.source,
+                    "success_score": r.success_score,
+                    "accepted_jobs": r.accepted_jobs,
+                }
+                for r in rows
+            ],
+            "duration_ms": int((time.time() - t0) * 1000),
         }
-        for r in rows2.fetchall()
-    ]
+
+    # -------------------------
+    # 2) Normalize trades
+    # -------------------------
+    trades: list[str] = []
+
+    if data.category and data.category.strip():
+        trades.append(data.category.strip())
+
+    for tag in data.tags:
+        if tag and tag.strip():
+            trades.append(tag.strip())
+
+    if not trades:
+        trades = ["General Contractor"]
+
+    # -------------------------
+    # 3) DISCOVERY (ONLY ONCE)
+    # HARD CAP = 5
+    # -------------------------
+    results = await search_subcontractors(
+        trades=trades,
+        radius="25",
+        preferred=[],
+        location=data.address or "",
+        db=db,
+    )
+
+    results = results[:5]
+
+    saved = 0
+
+    for r in results:
+        cleaned = clean_vendor_result(r)
+        if not cleaned or not cleaned.get("phone"):
+            continue
+
+        phone = cleaned["phone"]
+
+        try:
+            # ---- save vendor result
+            sr = SearchResult(
+                project_request_id=project_request_id,
+                vendor_name=cleaned["name"],
+                trade=cleaned.get("trade") or trades[0],
+                phone=phone,
+                email=cleaned.get("email"),
+                source=cleaned.get("source", "google"),
+            )
+            db.add(sr)
+            await db.flush()
+            saved += 1
+
+            # ---- upsert intelligence score
+            await db.execute(
+                text("""
+                    INSERT INTO vendor_scores (phone, seen_count)
+                    VALUES (:phone, 1)
+                    ON CONFLICT (phone)
+                    DO UPDATE SET
+                        seen_count = vendor_scores.seen_count + 1,
+                        updated_at = now()
+                """),
+                {"phone": phone},
+            )
+
+        except Exception:
+            continue
+
+    await db.commit()
+
+    # -------------------------
+    # 4) FINAL RETURN (ranked)
+    # -------------------------
+    rows = await db.execute(
+        text("""
+            SELECT
+                sr.id,
+                sr.vendor_name,
+                sr.trade,
+                sr.phone,
+                sr.email,
+                sr.source,
+                COALESCE(vs.success_score, 0) AS success_score,
+                COALESCE(vs.accepted_jobs, 0) AS accepted_jobs
+            FROM search_results sr
+            LEFT JOIN vendor_scores vs
+                ON vs.phone = sr.phone
+            WHERE sr.project_request_id = :pid
+            ORDER BY
+                COALESCE(vs.success_score, 0) DESC,
+                COALESCE(vs.accepted_jobs, 0) DESC,
+                sr.id DESC
+            LIMIT 50
+        """),
+        {"pid": project_request_id},
+    )
 
     return {
         "status": "ok",
         "project_request_id": project_request_id,
-        "vendors": vendors,
+        "cached": False,
         "saved_results": saved,
-        "cache_mode": "fresh_city_seed",
+        "vendors": [
+            {
+                "id": r.id,
+                "vendor_name": r.vendor_name,
+                "trade": r.trade,
+                "phone": r.phone,
+                "email": r.email,
+                "source": r.source,
+                "success_score": r.success_score,
+                "accepted_jobs": r.accepted_jobs,
+            }
+            for r in rows.fetchall()
+        ],
         "duration_ms": int((time.time() - t0) * 1000),
     }
