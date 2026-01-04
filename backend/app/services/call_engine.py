@@ -1,157 +1,249 @@
-# EOF: backend/app/services/call_engine.py
+# EOF: backend/app/routes/search_routes.py
 
-import logging
-import os
-import requests
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
+import time
+import re
 
-from app.models.vendor_call import VendorCall
+from app.db import get_db
+from app.models.search_result import SearchResult
+from app.services.match_engine import search_subcontractors
+from app.utils.vendor_guard import clean_vendor_result
 
-logger = logging.getLogger("retell-call-engine")
-
-RETELL_API_KEY = os.getenv("RETELL_API_KEY")
-RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
-RETELL_PHONE_NUMBER = os.getenv("RETELL_PHONE_NUMBER")
-
-RETELL_ENDPOINT = "https://api.retellai.com/v2/create-phone-call"
+router = APIRouter()
 
 
-async def start_retell_call(
-    *,
-    db: AsyncSession,
-    project_request_id: int,
-    trade: str,
-    vendor: dict,
-    phone_number: str,  # ✅ dial target (already forced by CallGuard in test mode)
-    vendor_phone: str | None = None,  # ✅ real vendor phone for storage/metadata
-    contractor_callback_phone: str | None = None,  # ✅ metadata only
-    attachments: list | None = None,
-    source: str = "autodial",
+# =========================
+# Request schema
+# =========================
+class SearchRequest(BaseModel):
+    project_request_id: int | None = None
+    project_id: int | None = None
+    category: str | None = None
+    tags: list[str] = []
+    address: str | None = None
+    notes: str | None = None
+    email: str | None = None
+
+
+# =========================
+# CITY NORMALIZATION (robust, human-proof)
+# =========================
+def extract_city(address: str | None) -> str | None:
+    """
+    Attempts to extract a usable city token from messy human input.
+    Works for:
+    - Full addresses
+    - City, State
+    - No commas
+    - Extra words
+    """
+    if not address:
+        return None
+
+    addr = address.lower().strip()
+
+    # Remove zip codes
+    addr = re.sub(r"\b\d{5}(-\d{4})?\b", "", addr)
+
+    # Split by commas first
+    parts = [p.strip() for p in addr.split(",") if p.strip()]
+    if len(parts) >= 2:
+        return parts[-2]  # usually city before state
+
+    # Fallback: split by spaces and take last meaningful token
+    tokens = [t for t in addr.split() if len(t) > 2]
+    if tokens:
+        return tokens[-1]
+
+    return None
+
+
+# =========================
+# Search endpoint
+# =========================
+@router.post("/search")
+async def perform_search(
+    data: SearchRequest,
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    SINGLE source of truth for outbound Retell calls.
-    phone_number = dial target.
-    vendor_phone = real vendor phone (kept for records / future calling logic).
-    contractor_callback_phone = contractor's callback (metadata only).
-    """
+    t0 = time.time()
 
-    if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
-        raise RuntimeError("Retell environment variables not fully configured")
+    project_request_id = data.project_request_id or data.project_id
+    if not project_request_id:
+        raise HTTPException(status_code=400, detail="project_request_id is required")
 
-    # -------------------------
-    # 1) Create VendorCall FIRST
-    # Store REAL vendor phone if available (not the dialed test number)
-    # -------------------------
-    vc = VendorCall(
-        project_request_id=project_request_id,
-        trade=trade,
-        vendor_name=vendor.get("name"),
-        vendor_phone=vendor_phone or phone_number,
-        status="called",
-    )
+    # Normalize trade
+    trades: list[str] = []
+    if data.category and data.category.strip():
+        trades.append(data.category.strip())
+    for tag in data.tags:
+        if tag and tag.strip():
+            trades.append(tag.strip())
+    if not trades:
+        trades = ["General Contractor"]
 
-    try:
-        db.add(vc)
-        await db.flush()
-    except SQLAlchemyError:
-        logger.exception("[RETELL CALL ENGINE] DB error creating VendorCall")
-        raise
+    trade = trades[0]
+    city = extract_city(data.address)
 
-    logger.warning(
-        "[RETELL CALL ENGINE] creating call",
-        extra={
-            "project_request_id": project_request_id,
-            "vendor_call_id": vc.id,
-            "vendor_name": vendor.get("name"),
-            "dial_target": phone_number,
-            "vendor_phone": vendor_phone,
-            "contractor_callback_phone": contractor_callback_phone,
-            "attachments": attachments or [],
-            "source": source,
-        },
-    )
-
-    # -------------------------
-    # 2) Retell payload
-    # to_number = dial target ONLY
-    # -------------------------
-    payload = {
-        "override_agent_id": RETELL_AGENT_ID,
-        "from_number": RETELL_PHONE_NUMBER,
-        "to_number": phone_number,
-        "metadata": {
-            "vendor_call_id": vc.id,
-            "project_request_id": project_request_id,
-            "attachments": attachments or [],
-            "source": source,
-            "dial_target": phone_number,
-            "vendor_phone": vendor_phone,
-            "contractor_callback_phone": contractor_callback_phone,
-            "vendor_name": vendor.get("name"),
-            "trade": trade,
-        },
-    }
-
-    try:
-        res = requests.post(
-            RETELL_ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {RETELL_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=30,
-        )
-        res.raise_for_status()
-        retell_data = res.json()
-
-    except requests.Timeout:
-        logger.error(
-            "[RETELL CALL ENGINE] timeout",
-            extra={"vendor_call_id": vc.id, "dial_target": phone_number},
-        )
-        raise
-
-    except requests.HTTPError:
-        logger.error(
-            "[RETELL CALL ENGINE] HTTP error",
-            extra={
-                "vendor_call_id": vc.id,
-                "status_code": res.status_code,
-                "response": res.text,
+    # -------------------------------------------------
+    # 1) SMART DB CACHE (city + trade + score)
+    # -------------------------------------------------
+    if city:
+        cached = await db.execute(
+            text("""
+                SELECT
+                    sr.id,
+                    sr.vendor_name,
+                    sr.trade,
+                    sr.phone,
+                    sr.email,
+                    sr.source,
+                    COALESCE(vs.score, 0) AS score
+                FROM search_results sr
+                LEFT JOIN vendor_scores vs
+                  ON vs.vendor_phone = sr.phone
+                 AND vs.trade = sr.trade
+                 AND vs.city = :city
+                WHERE sr.trade = :trade
+                  AND sr.phone IS NOT NULL
+                ORDER BY
+                  COALESCE(vs.score, 0) DESC,
+                  sr.id DESC
+                LIMIT 20
+            """),
+            {
+                "city": city,
+                "trade": trade,
             },
         )
-        raise
 
-    except Exception:
-        logger.exception("[RETELL CALL ENGINE] unexpected error calling Retell")
-        raise
+        rows = cached.fetchall()
+        if rows:
+            return {
+                "status": "ok",
+                "project_request_id": project_request_id,
+                "vendors": [
+                    {
+                        "id": r.id,
+                        "vendor_name": r.vendor_name,
+                        "trade": r.trade,
+                        "phone": r.phone,
+                        "email": r.email,
+                        "source": r.source,
+                        "score": float(r.score),
+                    }
+                    for r in rows
+                ],
+                "cache_mode": "city_score_ranked",
+                "duration_ms": int((time.time() - t0) * 1000),
+            }
 
-    # -------------------------
-    # 3) Persist retell_call_id
-    # -------------------------
-    vc.retell_call_id = retell_data.get("call_id")
+    # -------------------------------------------------
+    # 2) SLOW PATH (FIRST-TIME CITY DISCOVERY ONLY)
+    # Google / Yelp hit happens HERE
+    # -------------------------------------------------
+    results = await search_subcontractors(
+        trades=[trade],
+        radius="25",
+        preferred=[],
+        location=data.address or "",
+        db=db,
+    )
 
-    try:
-        await db.commit()
-    except SQLAlchemyError:
-        logger.exception(
-            "[RETELL CALL ENGINE] DB commit failed after Retell success",
-            extra={"vendor_call_id": vc.id},
-        )
-        raise
+    results = results[:5]  # UI-first, speed-first
 
-    logger.warning(
-        "[RETELL CALL ENGINE] call started",
-        extra={
-            "vendor_call_id": vc.id,
-            "retell_call_id": vc.retell_call_id,
-            "dial_target": phone_number,
+    saved = 0
+
+    for r in results:
+        cleaned = clean_vendor_result(r)
+        if not cleaned or not cleaned.get("phone"):
+            continue
+
+        try:
+            sr = SearchResult(
+                project_request_id=project_request_id,
+                vendor_name=cleaned["name"],
+                trade=trade,
+                phone=cleaned.get("phone"),
+                email=cleaned.get("email"),
+                source=cleaned.get("source", "google"),
+            )
+            db.add(sr)
+            saved += 1
+
+            # Initialize vendor score row if missing
+            if city:
+                await db.execute(
+                    text("""
+                        INSERT INTO vendor_scores
+                          (vendor_phone, vendor_name, trade, city, score)
+                        VALUES
+                          (:phone, :name, :trade, :city, 0)
+                        ON CONFLICT (vendor_phone, trade, city)
+                        DO NOTHING
+                    """),
+                    {
+                        "phone": cleaned.get("phone"),
+                        "name": cleaned["name"],
+                        "trade": trade,
+                        "city": city,
+                    },
+                )
+
+        except Exception:
+            continue
+
+    await db.commit()
+
+    # -------------------------------------------------
+    # 3) RETURN WHAT WE JUST SAVED (UI NEEDS IT NOW)
+    # -------------------------------------------------
+    rows2 = await db.execute(
+        text("""
+            SELECT
+                sr.id,
+                sr.vendor_name,
+                sr.trade,
+                sr.phone,
+                sr.email,
+                sr.source,
+                COALESCE(vs.score, 0) AS score
+            FROM search_results sr
+            LEFT JOIN vendor_scores vs
+              ON vs.vendor_phone = sr.phone
+             AND vs.trade = sr.trade
+             AND vs.city = :city
+            WHERE sr.project_request_id = :pid
+            ORDER BY score DESC, sr.id DESC
+            LIMIT 20
+        """),
+        {
+            "pid": project_request_id,
+            "city": city,
         },
     )
+
+    vendors = [
+        {
+            "id": r.id,
+            "vendor_name": r.vendor_name,
+            "trade": r.trade,
+            "phone": r.phone,
+            "email": r.email,
+            "source": r.source,
+            "score": float(r.score),
+        }
+        for r in rows2.fetchall()
+    ]
 
     return {
-        "vendor_call_id": vc.id,
-        "retell_call_id": vc.retell_call_id,
+        "status": "ok",
+        "project_request_id": project_request_id,
+        "vendors": vendors,
+        "saved_results": saved,
+        "cache_mode": "fresh_city_seed",
+        "duration_ms": int((time.time() - t0) * 1000),
     }
