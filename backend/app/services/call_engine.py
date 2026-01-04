@@ -6,11 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import time
 import re
-
 from app.db import get_db
+from app.models.search_result import SearchResult
+from app.utils.vendor_guard import clean_vendor_result
 
 router = APIRouter()
 
+
+ALLOW_DISCOVERY = False
+if ALLOW_DISCOVERY:
+    raise RuntimeError("Discovery is forbidden in call_engine")
 
 # =========================
 # Request schema
@@ -26,25 +31,40 @@ class SearchRequest(BaseModel):
 
 
 # =========================
-# CITY NORMALIZATION
+# CITY NORMALIZATION (robust, human-proof)
 # =========================
 def extract_city(address: str | None) -> str | None:
+    """
+    Attempts to extract a usable city token from messy human input.
+    Works for:
+    - Full addresses
+    - City, State
+    - No commas
+    - Extra words
+    """
     if not address:
         return None
 
     addr = address.lower().strip()
+
+    # Remove zip codes
     addr = re.sub(r"\b\d{5}(-\d{4})?\b", "", addr)
 
+    # Split by commas first
     parts = [p.strip() for p in addr.split(",") if p.strip()]
     if len(parts) >= 2:
-        return parts[-2]
+        return parts[-2]  # usually city before state
 
+    # Fallback: split by spaces and take last meaningful token
     tokens = [t for t in addr.split() if len(t) > 2]
-    return tokens[-1] if tokens else None
+    if tokens:
+        return tokens[-1]
+
+    return None
 
 
 # =========================
-# Search endpoint (DB ONLY)
+# Search endpoint
 # =========================
 @router.post("/search")
 async def perform_search(
@@ -64,23 +84,126 @@ async def perform_search(
     for tag in data.tags:
         if tag and tag.strip():
             trades.append(tag.strip())
+    if not trades:
+        trades = ["General Contractor"]
 
-    trade = trades[0] if trades else "General Contractor"
+    trade = trades[0]
     city = extract_city(data.address)
 
-    if not city:
-        return {
-            "status": "ok",
-            "project_request_id": project_request_id,
-            "vendors": [],
-            "message": "City not resolved",
-            "duration_ms": int((time.time() - t0) * 1000),
-        }
+    # -------------------------------------------------
+    # 1) SMART DB CACHE (city + trade + score)
+    # -------------------------------------------------
+    if city:
+        cached = await db.execute(
+            text("""
+                SELECT
+                    sr.id,
+                    sr.vendor_name,
+                    sr.trade,
+                    sr.phone,
+                    sr.email,
+                    sr.source,
+                    COALESCE(vs.score, 0) AS score
+                FROM search_results sr
+                LEFT JOIN vendor_scores vs
+                  ON vs.vendor_phone = sr.phone
+                 AND vs.trade = sr.trade
+                 AND vs.city = :city
+                WHERE sr.trade = :trade
+                  AND sr.phone IS NOT NULL
+                ORDER BY
+                  COALESCE(vs.score, 0) DESC,
+                  sr.id DESC
+                LIMIT 20
+            """),
+            {
+                "city": city,
+                "trade": trade,
+            },
+        )
+
+        rows = cached.fetchall()
+        if rows:
+            return {
+                "status": "ok",
+                "project_request_id": project_request_id,
+                "vendors": [
+                    {
+                        "id": r.id,
+                        "vendor_name": r.vendor_name,
+                        "trade": r.trade,
+                        "phone": r.phone,
+                        "email": r.email,
+                        "source": r.source,
+                        "score": float(r.score),
+                    }
+                    for r in rows
+                ],
+                "cache_mode": "city_score_ranked",
+                "duration_ms": int((time.time() - t0) * 1000),
+            }
 
     # -------------------------------------------------
-    # DB-ONLY ranked fetch (NO DISCOVERY)
+    # 2) SLOW PATH (FIRST-TIME CITY DISCOVERY ONLY)
+    # Google / Yelp hit happens HERE
     # -------------------------------------------------
-    result = await db.execute(
+    results = await search_subcontractors(
+        trades=[trade],
+        radius="25",
+        preferred=[],
+        location=data.address or "",
+        db=db,
+    )
+
+    results = results[:5]  # UI-first, speed-first
+
+    saved = 0
+
+    for r in results:
+        cleaned = clean_vendor_result(r)
+        if not cleaned or not cleaned.get("phone"):
+            continue
+
+        try:
+            sr = SearchResult(
+                project_request_id=project_request_id,
+                vendor_name=cleaned["name"],
+                trade=trade,
+                phone=cleaned.get("phone"),
+                email=cleaned.get("email"),
+                source=cleaned.get("source", "google"),
+            )
+            db.add(sr)
+            saved += 1
+
+            # Initialize vendor score row if missing
+            if city:
+                await db.execute(
+                    text("""
+                        INSERT INTO vendor_scores
+                          (vendor_phone, vendor_name, trade, city, score)
+                        VALUES
+                          (:phone, :name, :trade, :city, 0)
+                        ON CONFLICT (vendor_phone, trade, city)
+                        DO NOTHING
+                    """),
+                    {
+                        "phone": cleaned.get("phone"),
+                        "name": cleaned["name"],
+                        "trade": trade,
+                        "city": city,
+                    },
+                )
+
+        except Exception:
+            continue
+
+    await db.commit()
+
+    # -------------------------------------------------
+    # 3) RETURN WHAT WE JUST SAVED (UI NEEDS IT NOW)
+    # -------------------------------------------------
+    rows2 = await db.execute(
         text("""
             SELECT
                 sr.id,
@@ -95,15 +218,12 @@ async def perform_search(
               ON vs.vendor_phone = sr.phone
              AND vs.trade = sr.trade
              AND vs.city = :city
-            WHERE sr.trade = :trade
-              AND sr.phone IS NOT NULL
-            ORDER BY
-              COALESCE(vs.score, 0) DESC,
-              sr.id DESC
-            LIMIT 5
+            WHERE sr.project_request_id = :pid
+            ORDER BY score DESC, sr.id DESC
+            LIMIT 20
         """),
         {
-            "trade": trade,
+            "pid": project_request_id,
             "city": city,
         },
     )
@@ -118,13 +238,14 @@ async def perform_search(
             "source": r.source,
             "score": float(r.score),
         }
-        for r in result.fetchall()
+        for r in rows2.fetchall()
     ]
 
     return {
         "status": "ok",
         "project_request_id": project_request_id,
         "vendors": vendors,
-        "cache_mode": "db_only_ranked",
+        "saved_results": saved,
+        "cache_mode": "fresh_city_seed",
         "duration_ms": int((time.time() - t0) * 1000),
     }
