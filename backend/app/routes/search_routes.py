@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+import time
 
 from app.db import get_db
 from app.models.activity_log import ActivityLog
@@ -18,7 +19,7 @@ router = APIRouter()
 # =========================
 class SearchRequest(BaseModel):
     project_request_id: int | None = None
-    project_id: int | None = None   # backward compatibility
+    project_id: int | None = None
     category: str | None = None
     tags: list[str] = []
     address: str | None = None
@@ -34,11 +35,12 @@ async def perform_search(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    t0 = time.time()
+
     # -------------------------
     # 0) HARD GUARD
     # -------------------------
     project_request_id = data.project_request_id or data.project_id
-
     if not project_request_id:
         raise HTTPException(
             status_code=400,
@@ -46,7 +48,47 @@ async def perform_search(
         )
 
     # -------------------------
-    # 1) Ensure project exists
+    # 1) FAST PATH — DB CACHE
+    # -------------------------
+    existing = await db.execute(
+        text("""
+            SELECT
+                id,
+                vendor_name,
+                trade,
+                phone,
+                email,
+                source
+            FROM search_results
+            WHERE project_request_id = :pid
+            ORDER BY id DESC
+            LIMIT 50
+        """),
+        {"pid": project_request_id},
+    )
+
+    rows = existing.fetchall()
+    if rows:
+        return {
+            "status": "ok",
+            "project_request_id": project_request_id,
+            "raw_results": len(rows),
+            "saved_results": len(rows),
+            "vendors": [
+                {
+                    "id": r.id,
+                    "vendor_name": r.vendor_name,
+                    "trade": r.trade,
+                    "phone": r.phone,
+                    "email": r.email,
+                    "source": r.source,
+                }
+                for r in rows
+            ],
+        }
+
+    # -------------------------
+    # 2) Ensure project exists
     # -------------------------
     result = await db.execute(
         text("SELECT id FROM project_requests WHERE id = :id"),
@@ -69,7 +111,7 @@ async def perform_search(
         await db.commit()
 
     # -------------------------
-    # 2) Normalize trades
+    # 3) Normalize trades
     # -------------------------
     trades: list[str] = []
 
@@ -84,7 +126,8 @@ async def perform_search(
         trades = ["General Contractor"]
 
     # -------------------------
-    # 3) Run discovery engine (Google + DB)
+    # 4) Run discovery engine
+    # ⚠️ HARD CAP to prevent slowdown
     # -------------------------
     results = await search_subcontractors(
         trades=trades,
@@ -94,14 +137,16 @@ async def perform_search(
         db=db,
     )
 
+    results = results[:10]  # 🔥 SPEED CAP
+
     # -------------------------
-    # 4) Persist clean results
+    # 5) Persist clean results
     # -------------------------
     saved = 0
 
     for r in results:
         cleaned = clean_vendor_result(r)
-        if not cleaned:
+        if not cleaned or not cleaned.get("phone"):
             continue
 
         cleaned.pop("callable", None)
@@ -118,13 +163,13 @@ async def perform_search(
                 source=cleaned.get("source", "google"),
             )
             db.add(sr)
-            await db.flush()  # 🔥 required so rows exist immediately
+            await db.flush()
             saved += 1
-        except Exception as e:
-            print("❌ SearchResult insert failed:", e)
+        except Exception:
+            continue
 
     # -------------------------
-    # 5) FETCH RESULTS FOR UI
+    # 6) Fetch for UI
     # -------------------------
     rows = await db.execute(
         text("""
@@ -156,7 +201,7 @@ async def perform_search(
     ]
 
     # -------------------------
-    # 6) Activity log
+    # 7) Activity log
     # -------------------------
     db.add(
         ActivityLog(
@@ -166,17 +211,14 @@ async def perform_search(
             payload={
                 "trade": trades,
                 "address": data.address,
-                "raw_results": len(results),
                 "saved_results": saved,
+                "duration_ms": int((time.time() - t0) * 1000),
             },
         )
     )
 
     await db.commit()
 
-    # -------------------------
-    # 7) Async activity feed
-    # -------------------------
     await log_activity(
         {
             "user_id": "demo-user",
@@ -191,7 +233,7 @@ async def perform_search(
     )
 
     # -------------------------
-    # 8) FINAL RESPONSE (UI NEEDS THIS)
+    # 8) Final response
     # -------------------------
     return {
         "status": "ok",
