@@ -214,7 +214,7 @@ async def remove_vendor(
 # ---------------------------------------------------------
 # AUTOCOMPLETE SEARCH
 # ---------------------------------------------------------
-@router.get("/search")
+@router.get("/autocomplete")
 async def search_vendor_names(
     q: str = "",
     db: AsyncSession = Depends(get_db),
