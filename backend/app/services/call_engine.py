@@ -9,26 +9,25 @@ from app.db import get_db
 
 router = APIRouter(prefix="/autodial", tags=["AutoDial"])
 
-
-# -------------------------
+# -------------------------------------------------
 # HARD SAFETY GUARD
-# -------------------------
+# -------------------------------------------------
 # Call engine MUST NEVER run discovery
 FORBID_DISCOVERY = True
 
 
-# -------------------------
+# -------------------------------------------------
 # Helper: city normalization
-# -------------------------
+# -------------------------------------------------
 def extract_city(address: str | None) -> str | None:
     if not address:
         return None
     return address.split(",")[0].strip().lower()
 
 
-# -------------------------
-# Autodial request
-# -------------------------
+# -------------------------------------------------
+# Autodial request (DB ONLY)
+# -------------------------------------------------
 @router.post("/start")
 async def start_autodial(
     payload: dict,
@@ -36,7 +35,7 @@ async def start_autodial(
 ):
     """
     DB-ONLY vendor selection.
-    Never calls Google/Yelp.
+    NEVER calls Google / Yelp.
     """
 
     t0 = time.time()
@@ -46,15 +45,20 @@ async def start_autodial(
     address = payload.get("address")
 
     if not project_request_id or not trade:
-        raise HTTPException(status_code=400, detail="Missing project_request_id or trade")
+        raise HTTPException(
+            status_code=400,
+            detail="Missing project_request_id or trade",
+        )
 
     city = extract_city(address)
-
     if not city:
-        raise HTTPException(status_code=400, detail="City required for autodial")
+        raise HTTPException(
+            status_code=400,
+            detail="City required for autodial",
+        )
 
     # -------------------------------------------------
-    # DB-ONLY vendor selection (SINGLE SOURCE OF TRUTH)
+    # DB-ONLY ranked vendor fetch
     # -------------------------------------------------
     result = await db.execute(
         text("""
@@ -90,9 +94,6 @@ async def start_autodial(
 
     vendors = result.mappings().all()
 
-    # -------------------------------------------------
-    # NOTHING FOUND = SAFE EXIT
-    # -------------------------------------------------
     if not vendors:
         return {
             "status": "ok",
@@ -101,10 +102,6 @@ async def start_autodial(
             "duration_ms": int((time.time() - t0) * 1000),
         }
 
-    # -------------------------------------------------
-    # RETURN FOR CALL FLOW
-    # (call execution happens elsewhere)
-    # -------------------------------------------------
     return {
         "status": "ok",
         "project_request_id": project_request_id,
@@ -126,3 +123,17 @@ async def start_autodial(
         "selection_mode": "db_score_ranked",
         "duration_ms": int((time.time() - t0) * 1000),
     }
+
+
+# -------------------------------------------------
+# REQUIRED SYMBOL (BOOT FIX)
+# -------------------------------------------------
+async def start_retell_call(*args, **kwargs):
+    """
+    Stub required by autodial.py import.
+    Actual call execution intentionally disabled.
+    """
+    raise RuntimeError(
+        "start_retell_call is disabled. "
+        "Autodial execution is not active."
+    )
