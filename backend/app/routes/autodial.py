@@ -7,9 +7,11 @@ import logging
 import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.db import get_db
 from app.services.call_engine import start_retell_call
+from app.models.search_result import SearchResult
 
 logger = logging.getLogger("autodial")
 
@@ -28,8 +30,8 @@ async def autodial_start(
     vendors: str = Form(...),
 
     # ---- optional / guarded ----
-    attachments: Optional[str] = Form("[]"),        # JSON list of attachment IDs
-    retell_metadata: Optional[str] = Form("{}"),    # JSON dict (kept for forward-compat)
+    attachments: Optional[str] = Form("[]"),
+    retell_metadata: Optional[str] = Form("{}"),
     debug: Optional[bool] = Form(False),
 
     db: AsyncSession = Depends(get_db),
@@ -59,7 +61,7 @@ async def autodial_start(
         )
 
     # -------------------------
-    # Parse vendors
+    # Parse vendors JSON
     # -------------------------
     try:
         vendor_list: List[Dict[str, Any]] = json.loads(vendors)
@@ -76,12 +78,10 @@ async def autodial_start(
         if not isinstance(raw_attachment_ids, list):
             raise ValueError
 
-        # Normalize to int IDs only (drop junk safely)
         attachment_ids: List[int] = []
         for x in raw_attachment_ids:
             try:
-                ix = int(x)
-                attachment_ids.append(ix)
+                attachment_ids.append(int(x))
             except Exception:
                 continue
 
@@ -89,7 +89,7 @@ async def autodial_start(
         raise HTTPException(status_code=400, detail="Invalid attachments JSON")
 
     # -------------------------
-    # Parse retell_metadata (kept even if not used by call_engine)
+    # Parse retell metadata
     # -------------------------
     try:
         meta = json.loads(retell_metadata or "{}")
@@ -98,6 +98,36 @@ async def autodial_start(
         retell_meta: Dict[str, Any] = meta
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid retell_metadata JSON")
+
+    # -------------------------
+    # AUTO-HYDRATE vendors if empty
+    # -------------------------
+    if not vendor_list:
+        result = await db.execute(
+            select(SearchResult)
+            .where(SearchResult.project_request_id == project_request_id)
+            .limit(25)
+        )
+
+        vendor_list = [
+            {
+                "name": r.vendor_name,
+                "phone": r.phone,
+                "trade": r.trade,
+                "source": r.source,
+            }
+            for r in result.scalars().all()
+            if r.phone
+        ]
+
+        if debug:
+            logger.warning(
+                "[AUTODIAL DEBUG] vendors auto-hydrated",
+                extra={
+                    "project_request_id": project_request_id,
+                    "vendor_count": len(vendor_list),
+                },
+            )
 
     # -------------------------
     # Debug snapshot
@@ -112,7 +142,6 @@ async def autodial_start(
                 "max_confirmed": max_confirmed,
                 "vendor_count": len(vendor_list),
                 "attachments": attachment_ids,
-                "retell_metadata_keys": sorted(list(retell_meta.keys())),
             },
         )
 
@@ -127,48 +156,20 @@ async def autodial_start(
             break
 
         if not isinstance(vendor, dict):
-            if debug:
-                logger.warning(
-                    "[AUTODIAL DEBUG] vendor skipped (not a dict)",
-                    extra={"vendor_index": idx},
-                )
             continue
 
         phone = vendor.get("phone_e164") or vendor.get("phone")
         if not phone:
-            if debug:
-                logger.warning(
-                    "[AUTODIAL DEBUG] vendor skipped (missing phone_e164)",
-                    extra={
-                        "vendor_index": idx,
-                        "vendor_name": vendor.get("name"),
-                        "vendor_keys": sorted(list(vendor.keys())),
-                    },
-                )
             continue
 
         try:
-            if debug:
-                logger.warning(
-                    "[AUTODIAL DEBUG] starting call",
-                    extra={
-                        "project_request_id": project_request_id,
-                        "vendor_index": idx,
-                        "vendor_name": vendor.get("name"),
-                        "phone": phone,
-                        "attachments": attachment_ids,
-                    },
-                )
-
-            # ✅ IMPORTANT: NO metadata= here.
-            # call_engine is the single source of truth for Retell metadata.
             result = await start_retell_call(
                 db=db,
                 project_request_id=project_request_id,
                 trade=trade,
                 vendor=vendor,
                 phone_number=phone,
-                attachments=attachment_ids,  # ✅ correct channel
+                attachments=attachment_ids,
                 source="autodial",
             )
 
