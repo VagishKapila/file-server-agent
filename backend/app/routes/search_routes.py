@@ -17,7 +17,8 @@ router = APIRouter()
 # Request schema
 # =========================
 class SearchRequest(BaseModel):
-    project_request_id: int
+    project_request_id: int | None = None
+    project_id: int | None = None   # backward compatibility
     category: str | None = None
     tags: list[str] = []
     address: str | None = None
@@ -34,9 +35,11 @@ async def perform_search(
     db: AsyncSession = Depends(get_db),
 ):
     # -------------------------
-    # 0) HARD GUARD
+    # 0) HARD GUARD + BACKWARD COMPAT
     # -------------------------
-    if not data.project_request_id:
+    project_request_id = data.project_request_id or data.project_id
+
+    if not project_request_id:
         raise HTTPException(
             status_code=400,
             detail="project_request_id is required",
@@ -47,7 +50,7 @@ async def perform_search(
     # -------------------------
     result = await db.execute(
         text("SELECT id FROM project_requests WHERE id = :id"),
-        {"id": data.project_request_id},
+        {"id": project_request_id},
     )
 
     if not result.first():
@@ -57,7 +60,7 @@ async def perform_search(
                 VALUES (:id, :name, :location, :type)
             """),
             {
-                "id": data.project_request_id,
+                "id": project_request_id,
                 "name": "Auto-created from contractor search",
                 "location": data.address or "Unknown",
                 "type": "subs",
@@ -101,22 +104,25 @@ async def perform_search(
         if not cleaned:
             continue
 
-        # 🔥 ABSOLUTE SAFETY: strip non-DB keys
+        # strip non-DB keys defensively
         cleaned.pop("callable", None)
         cleaned.pop("confidence", None)
         cleaned.pop("score", None)
 
-        db.add(
-            SearchResult(
-                project_request_id=data.project_request_id,
+        try:
+            sr = SearchResult(
+                project_request_id=project_request_id,
                 vendor_name=cleaned["name"],
                 trade=cleaned.get("trade") or trades[0],
                 phone=cleaned.get("phone"),
                 email=cleaned.get("email"),
                 source=cleaned.get("source", "google"),
             )
-        )
-        saved += 1
+            db.add(sr)
+            await db.flush()  # 🔥 CRITICAL
+            saved += 1
+        except Exception as e:
+            print("❌ SearchResult insert failed:", e)
 
     # -------------------------
     # 5) Activity log
@@ -124,7 +130,7 @@ async def perform_search(
     db.add(
         ActivityLog(
             user_id="demo-user",
-            project_id=str(data.project_request_id),
+            project_id=str(project_request_id),
             action="contractor_search",
             payload={
                 "trade": trades,
@@ -143,7 +149,7 @@ async def perform_search(
     await log_activity(
         {
             "user_id": "demo-user",
-            "project_id": str(data.project_request_id),
+            "project_id": str(project_request_id),
             "action": "contractor_search",
             "payload": {
                 "trade": trades,
@@ -155,7 +161,7 @@ async def perform_search(
 
     return {
         "status": "ok",
-        "project_request_id": data.project_request_id,
+        "project_request_id": project_request_id,
         "raw_results": len(results),
         "saved_results": saved,
     }
