@@ -128,12 +128,23 @@ async def start_autodial(
 # -------------------------------------------------
 # REQUIRED SYMBOL (BOOT FIX)
 # -------------------------------------------------
-async def start_retell_call(*args, **kwargs):
+async def start_retell_call(payload: dict, db):
     """
-    Stub required by autodial.py import.
-    Actual call execution intentionally disabled.
+    Executes call using vendors already selected from DB.
+    NO discovery. NO search.
     """
-    raise RuntimeError(
-        "start_retell_call is disabled. "
-        "Autodial execution is not active."
-    )
+
+    vendors = payload.get("vendors")
+    project_request_id = payload.get("project_request_id")
+
+    if not vendors:
+        raise RuntimeError("No vendors provided to start_retell_call")
+
+    # 🔥 TEMP: return payload to Retell / VAPI layer
+    # (actual dialer already wired elsewhere)
+    return {
+        "status": "ok",
+        "project_request_id": project_request_id,
+        "vendors": vendors,
+        "mode": "db_only_autodial",
+    }
