@@ -1,17 +1,15 @@
 # EOF: backend/app/routes/search.py
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import time
 
 from app.db import get_db
-from app.models.activity_log import ActivityLog
 from app.models.search_result import SearchResult
 from app.services.match_engine import search_subcontractors
 from app.utils.vendor_guard import clean_vendor_result
-from app.routes.activity import log_activity
 
 router = APIRouter()
 
@@ -30,26 +28,86 @@ class SearchRequest(BaseModel):
 
 
 # =========================
-# Background worker
+# Search endpoint (FAST + SAFE)
 # =========================
-async def run_background_search(
-    *,
-    project_request_id: int,
-    trades: list[str],
-    address: str,
-    db: AsyncSession,
+@router.post("/search")
+async def perform_search(
+    data: SearchRequest,
+    db: AsyncSession = Depends(get_db),
 ):
+    t0 = time.time()
+
+    # -------------------------
+    # 0) HARD GUARD
+    # -------------------------
+    project_request_id = data.project_request_id or data.project_id
+    if not project_request_id:
+        raise HTTPException(status_code=400, detail="project_request_id is required")
+
+    # -------------------------
+    # 1) FAST PATH — DB CACHE (<50ms)
+    # -------------------------
+    cached = await db.execute(
+        text("""
+            SELECT id, vendor_name, trade, phone, email, source
+            FROM search_results
+            WHERE project_request_id = :pid
+            ORDER BY id DESC
+            LIMIT 50
+        """),
+        {"pid": project_request_id},
+    )
+
+    rows = cached.fetchall()
+    if rows:
+        return {
+            "status": "ok",
+            "project_request_id": project_request_id,
+            "vendors": [
+                {
+                    "id": r.id,
+                    "vendor_name": r.vendor_name,
+                    "trade": r.trade,
+                    "phone": r.phone,
+                    "email": r.email,
+                    "source": r.source,
+                }
+                for r in rows
+            ],
+            "duration_ms": int((time.time() - t0) * 1000),
+        }
+
+    # -------------------------
+    # 2) Normalize trades
+    # -------------------------
+    trades: list[str] = []
+
+    if data.category and data.category.strip():
+        trades.append(data.category.strip())
+
+    for tag in data.tags:
+        if tag and tag.strip():
+            trades.append(tag.strip())
+
+    if not trades:
+        trades = ["General Contractor"]
+
+    # -------------------------
+    # 3) RUN DISCOVERY (SYNC — UI NEEDS RESULTS)
+    # HARD CAP = 5 (speed)
+    # -------------------------
     results = await search_subcontractors(
         trades=trades,
         radius="25",
         preferred=[],
-        location=address,
+        location=data.address or "",
         db=db,
     )
 
-    results = results[:10]  # HARD CAP (speed + sanity)
+    results = results[:5]  # 🔥 SPEED FIX
 
     saved = 0
+
     for r in results:
         cleaned = clean_vendor_result(r)
         if not cleaned or not cleaned.get("phone"):
@@ -70,38 +128,10 @@ async def run_background_search(
         except Exception:
             continue
 
-    db.add(
-        ActivityLog(
-            user_id="demo-user",
-            project_id=str(project_request_id),
-            action="contractor_search_background",
-            payload={
-                "trade": trades,
-                "saved_results": saved,
-            },
-        )
-    )
-
     await db.commit()
 
-
-# =========================
-# Search endpoint
-# =========================
-@router.post("/search")
-async def perform_search(
-    data: SearchRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-):
-    t0 = time.time()
-
-    project_request_id = data.project_request_id or data.project_id
-    if not project_request_id:
-        raise HTTPException(status_code=400, detail="project_request_id is required")
-
     # -------------------------
-    # 1) FAST CACHE RETURN (<50ms)
+    # 4) RETURN FOR UI
     # -------------------------
     rows = await db.execute(
         text("""
@@ -114,53 +144,22 @@ async def perform_search(
         {"pid": project_request_id},
     )
 
-    cached = rows.fetchall()
-    if cached:
-        return {
-            "status": "ok",
-            "project_request_id": project_request_id,
-            "vendors": [
-                {
-                    "id": r.id,
-                    "vendor_name": r.vendor_name,
-                    "trade": r.trade,
-                    "phone": r.phone,
-                    "email": r.email,
-                    "source": r.source,
-                }
-                for r in cached
-            ],
-            "duration_ms": int((time.time() - t0) * 1000),
+    vendors = [
+        {
+            "id": r.id,
+            "vendor_name": r.vendor_name,
+            "trade": r.trade,
+            "phone": r.phone,
+            "email": r.email,
+            "source": r.source,
         }
+        for r in rows.fetchall()
+    ]
 
-    # -------------------------
-    # 2) Normalize trades
-    # -------------------------
-    trades = []
-    if data.category:
-        trades.append(data.category.strip())
-    trades.extend([t.strip() for t in data.tags if t.strip()])
-    if not trades:
-        trades = ["General Contractor"]
-
-    # -------------------------
-    # 3) Fire background search
-    # -------------------------
-    background_tasks.add_task(
-        run_background_search,
-        project_request_id=project_request_id,
-        trades=trades,
-        address=data.address or "",
-        db=db,
-    )
-
-    # -------------------------
-    # 4) INSTANT RESPONSE
-    # -------------------------
     return {
         "status": "ok",
         "project_request_id": project_request_id,
-        "vendors": [],
-        "message": "Search started",
+        "vendors": vendors,
+        "saved_results": saved,
         "duration_ms": int((time.time() - t0) * 1000),
     }
