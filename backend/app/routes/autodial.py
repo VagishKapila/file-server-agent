@@ -1,5 +1,3 @@
-# app/routes/autodial.py
-
 from fastapi import APIRouter, Form, Depends, HTTPException, Request
 from typing import List, Dict, Any, Optional
 import json
@@ -29,6 +27,9 @@ async def autodial_start(
     max_confirmed: int = Form(...),
     vendors: str = Form(...),
 
+    # ---- NEW (critical) ----
+    callback_phone: Optional[str] = Form(None),
+
     # ---- optional / guarded ----
     attachments: Optional[str] = Form("[]"),
     retell_metadata: Optional[str] = Form("{}"),
@@ -38,15 +39,13 @@ async def autodial_start(
 ):
     start_ts = time.time()
 
-    # -------------------------
-    # Guard: unexpected fields
-    # -------------------------
     allowed_fields = {
         "project_request_id",
         "project_address",
         "trade",
         "max_confirmed",
         "vendors",
+        "callback_phone",
         "attachments",
         "retell_metadata",
         "debug",
@@ -60,9 +59,6 @@ async def autodial_start(
             detail=f"Unexpected form fields: {sorted(unexpected)}",
         )
 
-    # -------------------------
-    # Parse vendors JSON
-    # -------------------------
     try:
         vendor_list: List[Dict[str, Any]] = json.loads(vendors)
         if not isinstance(vendor_list, list):
@@ -70,38 +66,11 @@ async def autodial_start(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid vendors JSON")
 
-    # -------------------------
-    # Parse attachments
-    # -------------------------
     try:
-        raw_attachment_ids = json.loads(attachments or "[]")
-        if not isinstance(raw_attachment_ids, list):
-            raise ValueError
-
-        attachment_ids: List[int] = []
-        for x in raw_attachment_ids:
-            try:
-                attachment_ids.append(int(x))
-            except Exception:
-                continue
-
+        attachment_ids = [int(x) for x in json.loads(attachments or "[]")]
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid attachments JSON")
 
-    # -------------------------
-    # Parse retell metadata
-    # -------------------------
-    try:
-        meta = json.loads(retell_metadata or "{}")
-        if not isinstance(meta, dict):
-            raise ValueError
-        retell_meta: Dict[str, Any] = meta
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid retell_metadata JSON")
-
-    # -------------------------
-    # AUTO-HYDRATE vendors if empty
-    # -------------------------
     if not vendor_list:
         result = await db.execute(
             select(SearchResult)
@@ -120,34 +89,16 @@ async def autodial_start(
             if r.phone
         ]
 
-        if debug:
-            logger.warning(
-                "[AUTODIAL DEBUG] vendors auto-hydrated",
-                extra={
-                    "project_request_id": project_request_id,
-                    "vendor_count": len(vendor_list),
-                },
-            )
-
-    # -------------------------
-    # Debug snapshot
-    # -------------------------
     if debug:
         logger.warning(
             "[AUTODIAL DEBUG] input snapshot",
             extra={
                 "project_request_id": project_request_id,
-                "project_address": project_address,
-                "trade": trade,
-                "max_confirmed": max_confirmed,
                 "vendor_count": len(vendor_list),
-                "attachments": attachment_ids,
+                "callback_phone": callback_phone,
             },
         )
 
-    # -------------------------
-    # Call loop
-    # -------------------------
     calls_made = 0
     calls_log: List[Dict[str, Any]] = []
 
@@ -155,11 +106,8 @@ async def autodial_start(
         if calls_made >= max_confirmed:
             break
 
-        if not isinstance(vendor, dict):
-            continue
-
-        phone = vendor.get("phone_e164") or vendor.get("phone")
-        if not phone:
+        phone_to_call = callback_phone or vendor.get("phone_e164") or vendor.get("phone")
+        if not phone_to_call:
             continue
 
         try:
@@ -168,7 +116,7 @@ async def autodial_start(
                 project_request_id=project_request_id,
                 trade=trade,
                 vendor=vendor,
-                phone_number=phone,
+                phone_number=phone_to_call,
                 attachments=attachment_ids,
                 source="autodial",
             )
@@ -178,23 +126,14 @@ async def autodial_start(
             calls_log.append(
                 {
                     "vendor": vendor.get("name"),
-                    "vendor_call_id": result.get("vendor_call_id"),
+                    "dialed": phone_to_call,
                     "retell_call_id": result.get("retell_call_id"),
                     "status": "called",
                 }
             )
 
         except Exception as e:
-            logger.exception(
-                "[AUTODIAL ERROR] start_retell_call failed",
-                extra={
-                    "project_request_id": project_request_id,
-                    "vendor_index": idx,
-                    "vendor_name": vendor.get("name"),
-                    "phone": phone,
-                },
-            )
-
+            logger.exception("[AUTODIAL ERROR]")
             calls_log.append(
                 {
                     "vendor": vendor.get("name"),
@@ -204,16 +143,6 @@ async def autodial_start(
             )
 
     duration_ms = int((time.time() - start_ts) * 1000)
-
-    if debug:
-        logger.warning(
-            "[AUTODIAL DEBUG] completed",
-            extra={
-                "project_request_id": project_request_id,
-                "calls_made": calls_made,
-                "duration_ms": duration_ms,
-            },
-        )
 
     return {
         "status": "ok",
