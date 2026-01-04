@@ -1,3 +1,5 @@
+# EOF: backend/app/services/call_engine.py
+
 import logging
 import os
 import requests
@@ -21,35 +23,37 @@ async def start_retell_call(
     project_request_id: int,
     trade: str,
     vendor: dict,
-    phone_number: str,
+    phone_number: str,  # ✅ dial target (already forced by CallGuard in test mode)
+    vendor_phone: str | None = None,  # ✅ real vendor phone for storage/metadata
+    contractor_callback_phone: str | None = None,  # ✅ metadata only
     attachments: list | None = None,
     source: str = "autodial",
 ):
     """
     SINGLE source of truth for outbound Retell calls.
-    DO NOT pass metadata from callers — enforced here.
+    phone_number = dial target.
+    vendor_phone = real vendor phone (kept for records / future calling logic).
+    contractor_callback_phone = contractor's callback (metadata only).
     """
 
-    # -------------------------
-    # 0️⃣ Hard env guard
-    # -------------------------
     if not RETELL_API_KEY or not RETELL_AGENT_ID or not RETELL_PHONE_NUMBER:
         raise RuntimeError("Retell environment variables not fully configured")
 
     # -------------------------
-    # 1️⃣ Create VendorCall FIRST
+    # 1) Create VendorCall FIRST
+    # Store REAL vendor phone if available (not the dialed test number)
     # -------------------------
     vc = VendorCall(
         project_request_id=project_request_id,
         trade=trade,
         vendor_name=vendor.get("name"),
-        vendor_phone=phone_number,
+        vendor_phone=vendor_phone or phone_number,
         status="called",
     )
 
     try:
         db.add(vc)
-        await db.flush()  # vc.id guaranteed
+        await db.flush()
     except SQLAlchemyError:
         logger.exception("[RETELL CALL ENGINE] DB error creating VendorCall")
         raise
@@ -60,14 +64,17 @@ async def start_retell_call(
             "project_request_id": project_request_id,
             "vendor_call_id": vc.id,
             "vendor_name": vendor.get("name"),
-            "phone": phone_number,
+            "dial_target": phone_number,
+            "vendor_phone": vendor_phone,
+            "contractor_callback_phone": contractor_callback_phone,
             "attachments": attachments or [],
             "source": source,
         },
     )
 
     # -------------------------
-    # 2️⃣ Retell payload (ONLY here)
+    # 2) Retell payload
+    # to_number = dial target ONLY
     # -------------------------
     payload = {
         "override_agent_id": RETELL_AGENT_ID,
@@ -78,6 +85,11 @@ async def start_retell_call(
             "project_request_id": project_request_id,
             "attachments": attachments or [],
             "source": source,
+            "dial_target": phone_number,
+            "vendor_phone": vendor_phone,
+            "contractor_callback_phone": contractor_callback_phone,
+            "vendor_name": vendor.get("name"),
+            "trade": trade,
         },
     }
 
@@ -97,7 +109,7 @@ async def start_retell_call(
     except requests.Timeout:
         logger.error(
             "[RETELL CALL ENGINE] timeout",
-            extra={"vendor_call_id": vc.id, "phone": phone_number},
+            extra={"vendor_call_id": vc.id, "dial_target": phone_number},
         )
         raise
 
@@ -117,7 +129,7 @@ async def start_retell_call(
         raise
 
     # -------------------------
-    # 3️⃣ Persist retell_call_id
+    # 3) Persist retell_call_id
     # -------------------------
     vc.retell_call_id = retell_data.get("call_id")
 
@@ -135,6 +147,7 @@ async def start_retell_call(
         extra={
             "vendor_call_id": vc.id,
             "retell_call_id": vc.retell_call_id,
+            "dial_target": phone_number,
         },
     )
 

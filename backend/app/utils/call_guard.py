@@ -1,26 +1,32 @@
+# EOF: backend/app/utils/call_guard.py
+
 import os
+from typing import Optional
 
-# Comma-separated test numbers allowed to receive calls
-TEST_CALL_NUMBERS = os.getenv(
-    "TEST_CALL_NUMBERS",
-    "+14084106151"  # your phone default
-).split(",")
+# === ENV FLAGS ===
+BETA_MODE = os.getenv("BETA_MODE", "true").lower() == "true"
 
-TEST_MODE = os.getenv("CALL_TEST_MODE", "true").lower() == "true"
+# Primary beta test phone (Vagish)
+BETA_TEST_NUMBER = os.getenv(
+    "BETA_TEST_NUMBER",
+    "+14084106151"
+).strip()
 
 
-def enforce_test_call(real_vendor_phone: str | None) -> str:
+def enforce_test_call(real_vendor_phone: Optional[str]) -> str:
     """
-    Enforces test-only calling.
-    - If TEST_MODE is ON → always return tester phone
-    - If OFF → return real vendor phone
+    SINGLE routing decision for outbound calls.
+
+    - If BETA_MODE = true → ALWAYS call beta test number
+    - If BETA_MODE = false → call real vendor phone
     """
 
-    if TEST_MODE:
-        # Always call first test number
-        return TEST_CALL_NUMBERS[0].strip()
+    if BETA_MODE:
+        if not BETA_TEST_NUMBER:
+            raise ValueError("BETA_MODE enabled but BETA_TEST_NUMBER not set")
+        return BETA_TEST_NUMBER
 
     if not real_vendor_phone:
-        raise ValueError("Missing vendor phone")
+        raise ValueError("Missing vendor phone while BETA_MODE=false")
 
     return real_vendor_phone
