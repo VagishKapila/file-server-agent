@@ -35,7 +35,7 @@ async def perform_search(
     db: AsyncSession = Depends(get_db),
 ):
     # -------------------------
-    # 0) HARD GUARD + BACKWARD COMPAT
+    # 0) HARD GUARD
     # -------------------------
     project_request_id = data.project_request_id or data.project_id
 
@@ -84,7 +84,7 @@ async def perform_search(
         trades = ["General Contractor"]
 
     # -------------------------
-    # 3) Run search engine
+    # 3) Run discovery engine (Google + DB)
     # -------------------------
     results = await search_subcontractors(
         trades=trades,
@@ -95,7 +95,7 @@ async def perform_search(
     )
 
     # -------------------------
-    # 4) Persist CLEAN results
+    # 4) Persist clean results
     # -------------------------
     saved = 0
 
@@ -104,7 +104,6 @@ async def perform_search(
         if not cleaned:
             continue
 
-        # strip non-DB keys defensively
         cleaned.pop("callable", None)
         cleaned.pop("confidence", None)
         cleaned.pop("score", None)
@@ -119,13 +118,45 @@ async def perform_search(
                 source=cleaned.get("source", "google"),
             )
             db.add(sr)
-            await db.flush()  # 🔥 CRITICAL
+            await db.flush()  # 🔥 required so rows exist immediately
             saved += 1
         except Exception as e:
             print("❌ SearchResult insert failed:", e)
 
     # -------------------------
-    # 5) Activity log
+    # 5) FETCH RESULTS FOR UI
+    # -------------------------
+    rows = await db.execute(
+        text("""
+            SELECT
+                id,
+                vendor_name,
+                trade,
+                phone,
+                email,
+                source
+            FROM search_results
+            WHERE project_request_id = :pid
+            ORDER BY id DESC
+            LIMIT 50
+        """),
+        {"pid": project_request_id},
+    )
+
+    vendors = [
+        {
+            "id": r.id,
+            "vendor_name": r.vendor_name,
+            "trade": r.trade,
+            "phone": r.phone,
+            "email": r.email,
+            "source": r.source,
+        }
+        for r in rows.fetchall()
+    ]
+
+    # -------------------------
+    # 6) Activity log
     # -------------------------
     db.add(
         ActivityLog(
@@ -144,7 +175,7 @@ async def perform_search(
     await db.commit()
 
     # -------------------------
-    # 6) Async activity feed
+    # 7) Async activity feed
     # -------------------------
     await log_activity(
         {
@@ -159,9 +190,13 @@ async def perform_search(
         db,
     )
 
+    # -------------------------
+    # 8) FINAL RESPONSE (UI NEEDS THIS)
+    # -------------------------
     return {
         "status": "ok",
         "project_request_id": project_request_id,
         "raw_results": len(results),
         "saved_results": saved,
+        "vendors": vendors,
     }
