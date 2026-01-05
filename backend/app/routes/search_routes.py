@@ -22,7 +22,7 @@ router = APIRouter()
 # =========================
 class SearchRequest(BaseModel):
     project_request_id: int | None = None
-    project_id: int | None = None   # backward compatibility
+    project_id: int | None = None
     category: str | None = None
     tags: list[str] = []
     address: str | None = None
@@ -42,20 +42,20 @@ def _make_cache_key(trades: list[str], address: str | None) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def _fetch_latest_results(
+async def _fetch_global_results(
     db: AsyncSession,
-    project_request_id: int,
+    trades: list[str],
     limit: int = 50,
 ):
     rows = await db.execute(
         text("""
             SELECT id, vendor_name, trade, phone, email, source
             FROM search_results
-            WHERE project_request_id = :pid
+            WHERE trade = ANY(:trades)
             ORDER BY id DESC
             LIMIT :limit
         """),
-        {"pid": project_request_id, "limit": limit},
+        {"trades": trades, "limit": limit},
     )
     return rows.fetchall()
 
@@ -117,7 +117,7 @@ async def perform_search(
     cache_key = _make_cache_key(trades, data.address)
 
     # -------------------------
-    # 2.5) CACHE HIT (15 min)
+    # 2.5) CACHE HIT (GLOBAL)
     # -------------------------
     try:
         since = datetime.utcnow() - timedelta(minutes=15)
@@ -134,7 +134,7 @@ async def perform_search(
         )
 
         if cached.first():
-            rows = await _fetch_latest_results(db, project_request_id)
+            rows = await _fetch_global_results(db, trades)
             vendors = [
                 {
                     "id": r.id,
@@ -148,9 +148,7 @@ async def perform_search(
             ]
 
             print(
-                "CACHE HIT | pid=",
-                project_request_id,
-                "vendors=",
+                "CACHE HIT (GLOBAL) | vendors=",
                 len(vendors),
                 "ms=",
                 int((time.time() - t0) * 1000),
@@ -191,9 +189,7 @@ async def perform_search(
         results = []
 
     print(
-        "DISCOVERY DONE | pid=",
-        project_request_id,
-        "raw=",
+        "DISCOVERY DONE | raw=",
         len(results),
         "ms=",
         int((time.time() - t_discovery) * 1000),
@@ -220,28 +216,25 @@ async def perform_search(
         source = cleaned.get("source", "google")
 
         try:
-            # Phone enrichment: update existing row if phone appears later
             if phone:
                 existing = await db.execute(
                     text("""
                         SELECT id, phone
                         FROM search_results
-                        WHERE project_request_id = :pid
-                          AND vendor_name = :name
+                        WHERE vendor_name = :name
                           AND trade = :trade
                           AND source = :source
                         ORDER BY id DESC
                         LIMIT 1
                     """),
                     {
-                        "pid": project_request_id,
                         "name": name,
                         "trade": trade,
                         "source": source,
                     },
                 )
                 row = existing.first()
-                if row and (row.phone is None or row.phone == ""):
+                if row and not row.phone:
                     await db.execute(
                         text("""
                             UPDATE search_results
@@ -258,7 +251,7 @@ async def perform_search(
                 project_request_id=project_request_id,
                 vendor_name=name,
                 trade=trade,
-                phone=phone,   # allowed to be NULL
+                phone=phone,
                 email=email,
                 source=source,
             )
@@ -270,9 +263,9 @@ async def perform_search(
             print("❌ SearchResult insert failed:", e)
 
     # -------------------------
-    # 5) FETCH RESULTS FOR UI
+    # 5) FINAL GLOBAL FETCH
     # -------------------------
-    rows = await _fetch_latest_results(db, project_request_id)
+    rows = await _fetch_global_results(db, trades)
 
     vendors = [
         {
@@ -323,9 +316,7 @@ async def perform_search(
     )
 
     print(
-        "SEARCH COMPLETE | pid=",
-        project_request_id,
-        "saved=",
+        "SEARCH COMPLETE | saved=",
         saved,
         "total_ms=",
         int((time.time() - t0) * 1000),
