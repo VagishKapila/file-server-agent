@@ -1,0 +1,3 @@
+This version of the CLI has been deprecated.
+Install the Railway CLI from @railway/cli
+View the docs for more information: https://railway.app/docs
