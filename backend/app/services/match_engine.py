@@ -1,15 +1,19 @@
+import asyncio
+from typing import List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
 
+from app.models.search_result import SearchResult
 from app.services.google_places import (
     google_places_text_search,
     google_place_details,
 )
 from app.services.yelp_enricher import enrich_with_yelp
-from app.models.search_result import SearchResult
 
 
+# -------------------------
+# Normalizers
+# -------------------------
 def normalize_city(city: str | None) -> str:
     return (city or "").strip().lower()
 
@@ -25,6 +29,44 @@ def normalize_name(name: str | None) -> str:
     )
 
 
+# -------------------------
+# Safe wrappers (threaded)
+# -------------------------
+async def _google_search_safe(trade: str, location: str):
+    try:
+        return await asyncio.to_thread(
+            google_places_text_search,
+            trade,
+            location,
+        )
+    except Exception:
+        return []
+
+
+async def _google_details_safe(place_id: str):
+    try:
+        return await asyncio.to_thread(
+            google_place_details,
+            place_id,
+        )
+    except Exception:
+        return None
+
+
+async def _yelp_safe(name: str, location: str):
+    try:
+        return await asyncio.to_thread(
+            enrich_with_yelp,
+            name=name,
+            location=location,
+        )
+    except Exception:
+        return None
+
+
+# -------------------------
+# MAIN ENTRY
+# -------------------------
 async def search_subcontractors(
     trades: List[str],
     radius,
@@ -33,11 +75,12 @@ async def search_subcontractors(
     db: AsyncSession,
 ):
     """
-    SOURCE ORDER (FINAL):
+    FINAL PIPELINE (SAFE + FAST)
+
     1. DB cache
-    2. Google Places Text Search
-    3. Google Place Details (phone)
-    4. Yelp fallback (phone only)
+    2. Google text search (parallel per trade)
+    3. Google details + Yelp fallback (parallel per place)
+    4. Sort callable → same city → preferred
     """
 
     preferred_set = {p.lower() for p in preferred}
@@ -47,7 +90,7 @@ async def search_subcontractors(
     seen = set()
 
     # -------------------------------------------------
-    # 1) LOAD CACHED VENDORS (DB MEMORY)
+    # 1) DB CACHE (FAST, NON-BLOCKING)
     # -------------------------------------------------
     db_results = await db.execute(
         select(SearchResult).where(SearchResult.trade.in_(trades))
@@ -74,60 +117,75 @@ async def search_subcontractors(
         })
 
     # -------------------------------------------------
-    # 2) GOOGLE PLACES DISCOVERY
+    # 2) GOOGLE SEARCH (PARALLEL PER TRADE)
     # -------------------------------------------------
-    for trade in trades:
-        places = google_places_text_search(trade, location)
+    google_tasks = [
+        _google_search_safe(trade, location)
+        for trade in trades
+    ]
 
-        for p in places:
-            name = p.get("name")
-            place_id = p.get("place_id")
+    google_batches = await asyncio.gather(*google_tasks)
 
-            if not name:
-                continue
-
-            phone = None
-            source = "google_places"
-
-            # -------------------------------------------------
-            # 2A) GOOGLE PLACE DETAILS (PHONE)
-            # -------------------------------------------------
-            if place_id:
-                details = google_place_details(place_id)
-                if details:
-                    phone = details.get("phone")
-
-            # -------------------------------------------------
-            # 2B) YELP FALLBACK (ONLY IF PHONE MISSING)
-            # -------------------------------------------------
-            if not phone:
-                enriched = enrich_with_yelp(
-                    name=name,
-                    location=location,
-                )
-                if enriched and enriched.get("phone"):
-                    phone = enriched["phone"]
-                    source = enriched.get("source", "yelp")
-
-            city = normalize_city(p.get("address") or "")
-
-            key = (normalize_name(name), phone or city)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            merged.append({
-                "name": name,
-                "phone": phone,
-                "city": city,
-                "callable": bool(phone),
-                "preferred": name.lower() in preferred_set,
-                "same_city": city == job_city if city else False,
-                "source": source,
-            })
+    # HARD CAP to avoid explosion
+    places = []
+    for batch in google_batches:
+        places.extend(batch[:5])  # max 5 per trade
 
     # -------------------------------------------------
-    # 3) SORT (CALLABLE → SAME CITY → PREFERRED)
+    # 3) DETAILS + YELP (PARALLEL PER PLACE)
+    # -------------------------------------------------
+    async def enrich_place(p):
+        name = p.get("name")
+        place_id = p.get("place_id")
+
+        if not name:
+            return None
+
+        phone = None
+        source = "google_places"
+
+        if place_id:
+            details = await _google_details_safe(place_id)
+            if details:
+                phone = details.get("phone")
+
+        if not phone:
+            enriched = await _yelp_safe(name, location)
+            if enriched and enriched.get("phone"):
+                phone = enriched["phone"]
+                source = enriched.get("source", "yelp")
+
+        city = normalize_city(p.get("address") or "")
+
+        return {
+            "name": name,
+            "phone": phone,
+            "city": city,
+            "callable": bool(phone),
+            "preferred": name.lower() in preferred_set,
+            "same_city": city == job_city if city else False,
+            "source": source,
+        }
+
+    enrichment_tasks = [
+        enrich_place(p)
+        for p in places
+    ]
+
+    enriched_results = await asyncio.gather(*enrichment_tasks)
+
+    for e in enriched_results:
+        if not e:
+            continue
+
+        key = (normalize_name(e["name"]), e["phone"] or e["city"])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(e)
+
+    # -------------------------------------------------
+    # 4) SORT (UNCHANGED BEHAVIOR)
     # -------------------------------------------------
     merged.sort(
         key=lambda x: (

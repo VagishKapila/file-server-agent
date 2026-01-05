@@ -1,3 +1,8 @@
+import asyncio
+import time
+import hashlib
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +16,6 @@ from app.utils.vendor_guard import clean_vendor_result
 from app.routes.activity import log_activity
 
 router = APIRouter()
-
 
 # =========================
 # Request schema
@@ -27,6 +31,36 @@ class SearchRequest(BaseModel):
 
 
 # =========================
+# Helpers
+# =========================
+def _norm(val: str | None) -> str:
+    return (val or "").strip().lower()
+
+
+def _make_cache_key(trades: list[str], address: str | None) -> str:
+    raw = "|".join(sorted(_norm(t) for t in trades)) + "||" + _norm(address)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _fetch_latest_results(
+    db: AsyncSession,
+    project_request_id: int,
+    limit: int = 50,
+):
+    rows = await db.execute(
+        text("""
+            SELECT id, vendor_name, trade, phone, email, source
+            FROM search_results
+            WHERE project_request_id = :pid
+            ORDER BY id DESC
+            LIMIT :limit
+        """),
+        {"pid": project_request_id, "limit": limit},
+    )
+    return rows.fetchall()
+
+
+# =========================
 # Search endpoint
 # =========================
 @router.post("/search")
@@ -34,26 +68,23 @@ async def perform_search(
     data: SearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    t0 = time.time()
+
     # -------------------------
     # 0) HARD GUARD
     # -------------------------
     project_request_id = data.project_request_id or data.project_id
-
     if not project_request_id:
-        raise HTTPException(
-            status_code=400,
-            detail="project_request_id is required",
-        )
+        raise HTTPException(status_code=400, detail="project_request_id is required")
 
     # -------------------------
     # 1) Ensure project exists
     # -------------------------
-    result = await db.execute(
+    exists = await db.execute(
         text("SELECT id FROM project_requests WHERE id = :id"),
         {"id": project_request_id},
     )
-
-    if not result.first():
+    if not exists.first():
         await db.execute(
             text("""
                 INSERT INTO project_requests (id, project_name, location, request_type)
@@ -83,19 +114,93 @@ async def perform_search(
     if not trades:
         trades = ["General Contractor"]
 
+    cache_key = _make_cache_key(trades, data.address)
+
     # -------------------------
-    # 3) Run discovery engine (Google + DB)
+    # 2.5) CACHE HIT (15 min)
     # -------------------------
-    results = await search_subcontractors(
-        trades=trades,
-        radius="25",
-        preferred=[],
-        location=data.address or "",
-        db=db,
+    try:
+        since = datetime.utcnow() - timedelta(minutes=15)
+        cached = await db.execute(
+            text("""
+                SELECT id
+                FROM activity_log
+                WHERE action = 'contractor_search'
+                  AND (payload->>'cache_key') = :key
+                  AND created_at >= :since
+                LIMIT 1
+            """),
+            {"key": cache_key, "since": since},
+        )
+
+        if cached.first():
+            rows = await _fetch_latest_results(db, project_request_id)
+            vendors = [
+                {
+                    "id": r.id,
+                    "vendor_name": r.vendor_name,
+                    "trade": r.trade,
+                    "phone": r.phone,
+                    "email": r.email,
+                    "source": r.source,
+                }
+                for r in rows
+            ]
+
+            print(
+                "CACHE HIT | pid=",
+                project_request_id,
+                "vendors=",
+                len(vendors),
+                "ms=",
+                int((time.time() - t0) * 1000),
+            )
+
+            return {
+                "status": "ok",
+                "project_request_id": project_request_id,
+                "raw_results": 0,
+                "saved_results": 0,
+                "cached": True,
+                "vendors": vendors,
+            }
+
+    except Exception as e:
+        print("CACHE CHECK FAILED:", e)
+
+    # -------------------------
+    # 3) DISCOVERY (HARD TIMEOUT)
+    # -------------------------
+    t_discovery = time.time()
+    try:
+        results = await asyncio.wait_for(
+            search_subcontractors(
+                trades=trades,
+                radius="25",
+                preferred=[],
+                location=data.address or "",
+                db=db,
+            ),
+            timeout=20,
+        )
+    except asyncio.TimeoutError:
+        print("DISCOVERY TIMEOUT | pid=", project_request_id)
+        results = []
+    except Exception as e:
+        print("DISCOVERY ERROR:", e)
+        results = []
+
+    print(
+        "DISCOVERY DONE | pid=",
+        project_request_id,
+        "raw=",
+        len(results),
+        "ms=",
+        int((time.time() - t_discovery) * 1000),
     )
 
     # -------------------------
-    # 4) Persist clean results
+    # 4) PERSIST RESULTS
     # -------------------------
     saved = 0
 
@@ -108,40 +213,66 @@ async def perform_search(
         cleaned.pop("confidence", None)
         cleaned.pop("score", None)
 
+        name = cleaned["name"]
+        trade = cleaned.get("trade") or trades[0]
+        phone = cleaned.get("phone")
+        email = cleaned.get("email")
+        source = cleaned.get("source", "google")
+
         try:
+            # Phone enrichment: update existing row if phone appears later
+            if phone:
+                existing = await db.execute(
+                    text("""
+                        SELECT id, phone
+                        FROM search_results
+                        WHERE project_request_id = :pid
+                          AND vendor_name = :name
+                          AND trade = :trade
+                          AND source = :source
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """),
+                    {
+                        "pid": project_request_id,
+                        "name": name,
+                        "trade": trade,
+                        "source": source,
+                    },
+                )
+                row = existing.first()
+                if row and (row.phone is None or row.phone == ""):
+                    await db.execute(
+                        text("""
+                            UPDATE search_results
+                            SET phone = :phone,
+                                email = COALESCE(email, :email)
+                            WHERE id = :id
+                        """),
+                        {"phone": phone, "email": email, "id": row.id},
+                    )
+                    saved += 1
+                    continue
+
             sr = SearchResult(
                 project_request_id=project_request_id,
-                vendor_name=cleaned["name"],
-                trade=cleaned.get("trade") or trades[0],
-                phone=cleaned.get("phone"),
-                email=cleaned.get("email"),
-                source=cleaned.get("source", "google"),
+                vendor_name=name,
+                trade=trade,
+                phone=phone,   # allowed to be NULL
+                email=email,
+                source=source,
             )
             db.add(sr)
-            await db.flush()  # 🔥 required so rows exist immediately
+            await db.flush()
             saved += 1
+
         except Exception as e:
             print("❌ SearchResult insert failed:", e)
 
     # -------------------------
     # 5) FETCH RESULTS FOR UI
     # -------------------------
-    rows = await db.execute(
-        text("""
-            SELECT
-                id,
-                vendor_name,
-                trade,
-                phone,
-                email,
-                source
-            FROM search_results
-            WHERE project_request_id = :pid
-            ORDER BY id DESC
-            LIMIT 50
-        """),
-        {"pid": project_request_id},
-    )
+    rows = await _fetch_latest_results(db, project_request_id)
 
     vendors = [
         {
@@ -152,11 +283,11 @@ async def perform_search(
             "email": r.email,
             "source": r.source,
         }
-        for r in rows.fetchall()
+        for r in rows
     ]
 
     # -------------------------
-    # 6) Activity log
+    # 6) ACTIVITY LOG
     # -------------------------
     db.add(
         ActivityLog(
@@ -168,6 +299,7 @@ async def perform_search(
                 "address": data.address,
                 "raw_results": len(results),
                 "saved_results": saved,
+                "cache_key": cache_key,
             },
         )
     )
@@ -175,7 +307,7 @@ async def perform_search(
     await db.commit()
 
     # -------------------------
-    # 7) Async activity feed
+    # 7) ASYNC ACTIVITY FEED
     # -------------------------
     await log_activity(
         {
@@ -190,8 +322,17 @@ async def perform_search(
         db,
     )
 
+    print(
+        "SEARCH COMPLETE | pid=",
+        project_request_id,
+        "saved=",
+        saved,
+        "total_ms=",
+        int((time.time() - t0) * 1000),
+    )
+
     # -------------------------
-    # 8) FINAL RESPONSE (UI NEEDS THIS)
+    # 8) FINAL RESPONSE
     # -------------------------
     return {
         "status": "ok",
