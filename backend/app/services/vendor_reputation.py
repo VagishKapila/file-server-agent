@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # - Speed + cost control
 # ============================================================
 
-
 def _normalize_name(name: str | None) -> str:
     return (
         (name or "")
@@ -22,13 +21,18 @@ def _normalize_name(name: str | None) -> str:
         .strip()
     )
 
-
 def _anchor_key(name: str, phone: str | None) -> Tuple[str, str]:
     return (
         _normalize_name(name),
         phone or "",
     )
 
+def apply_vendor_reputation(vendors: list) -> list:
+    """
+    Applies reputation weighting to vendors.
+    Currently a no-op placeholder.
+    """
+    return vendors
 
 # ------------------------------------------------------------
 # Fetch anchored vendors (global reuse)
