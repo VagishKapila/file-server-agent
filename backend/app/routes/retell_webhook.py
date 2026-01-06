@@ -187,6 +187,7 @@ async def retell_webhook(
         return {"ok": True}
 
     metadata = call.get("metadata") or {}
+    share_link = (metadata.get("share_link") or "").strip()
     if not isinstance(metadata, dict):
         metadata = {}
 
@@ -354,7 +355,10 @@ async def retell_webhook(
             "project_request_id": vendor_call.project_request_id,
             "attachments": attachment_ids,
             "subject": "Project Drawings – BAINS Development",
-            "message": "As discussed on the call, attached are the project files.",
+           "message": (
+                "As discussed on the call, attached are the project files."
+                + (f"\n\nLarge files link:\n{share_link}" if share_link else "")
+            ),
             "related_call_id": call_id,
         },
         db=db,

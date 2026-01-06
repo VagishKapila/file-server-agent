@@ -26,11 +26,12 @@ async def start_retell_call(
     project_request_id: int,
     trade: str,
     vendor: Dict[str, Any],
-    phone_number: str,                 # the actual number we will dial (your number during beta)
-    vendor_phone: str,                 # the real vendor phone (stored + sent as metadata)
+    phone_number: str,
+    vendor_phone: str,
     contractor_callback_phone: Optional[str] = None,
     attachments: Optional[list[int]] = None,
     source: str = "autodial",
+    extra_metadata: Optional[Dict[str, Any]] = None,   # ← ADD THIS
 ):
     if not phone_number:
         raise ValueError("Missing phone_number")
@@ -101,6 +102,16 @@ async def start_retell_call(
         "attachments": attachments or [],
         "source": source,
     }
+
+    # ---- merge extra metadata (e.g. share_link) ----
+    if isinstance(extra_metadata, dict):
+        for k, v in extra_metadata.items():
+            if v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                retell_metadata[k] = v
+            else:
+                retell_metadata[k] = str(v)
 
     payload = {
         "override_agent_id": retell_agent_id,
