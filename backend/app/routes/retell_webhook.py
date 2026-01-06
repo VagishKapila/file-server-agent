@@ -187,9 +187,10 @@ async def retell_webhook(
         return {"ok": True}
 
     metadata = call.get("metadata") or {}
-    share_link = (metadata.get("share_link") or "").strip()
     if not isinstance(metadata, dict):
         metadata = {}
+
+    share_link = (metadata.get("share_link") or "").strip()
 
     logger.warning(
         "🧾 CALL HEADER | event=%s call_id=%s metadata_keys=%s",
