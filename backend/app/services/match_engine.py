@@ -10,6 +10,9 @@ from app.services.google_places import (
 )
 from app.services.yelp_enricher import enrich_with_yelp
 
+# ✅ NEW (SAFE, ISOLATED)
+from app.services.vendor_reputation import apply_vendor_reputation
+
 
 # -------------------------
 # Normalizers
@@ -80,7 +83,8 @@ async def search_subcontractors(
     1. DB cache
     2. Google text search (parallel per trade)
     3. Google details + Yelp fallback (parallel per place)
-    4. Sort callable → same city → preferred
+    4. Reputation weighting (NEW, isolated)
+    5. Sort callable → same city → preferred
     """
 
     preferred_set = {p.lower() for p in preferred}
@@ -149,6 +153,7 @@ async def search_subcontractors(
             if details:
                 phone = details.get("phone")
 
+        # Yelp ONLY if phone missing (cost control ✅)
         if not phone:
             enriched = await _yelp_safe(name, location)
             if enriched and enriched.get("phone"):
@@ -185,7 +190,12 @@ async def search_subcontractors(
         merged.append(e)
 
     # -------------------------------------------------
-    # 4) SORT (UNCHANGED BEHAVIOR)
+    # 4) REPUTATION WEIGHTING (NEW, SAFE)
+    # -------------------------------------------------
+    merged = apply_vendor_reputation(merged)
+
+    # -------------------------------------------------
+    # 5) SORT (UNCHANGED BEHAVIOR)
     # -------------------------------------------------
     merged.sort(
         key=lambda x: (

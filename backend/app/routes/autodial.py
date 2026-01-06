@@ -59,10 +59,12 @@ async def autodial_start(
         "callback_phone",
         "attachments",
         "retell_metadata",
+        "share_link",
         "debug",
     }
 
     form = await request.form()
+    share_link = (form.get("share_link") or "").strip()
     unexpected = set(form.keys()) - allowed_fields
     if unexpected:
         logger.error("❌ Unexpected form fields: %s", sorted(unexpected))
@@ -160,6 +162,9 @@ async def autodial_start(
         )
 
         try:
+            extra_metadata = {}
+            if share_link:
+                extra_metadata["share_link"] = share_link
             result = await start_retell_call(
                 db=db,
                 project_request_id=project_request_id,
@@ -169,6 +174,7 @@ async def autodial_start(
                 vendor_phone=vendor_phone,       # real vendor
                 contractor_callback_phone=callback_phone,
                 attachments=attachment_ids,
+                extra_metadata=extra_metadata,
                 source="autodial",
             )
 

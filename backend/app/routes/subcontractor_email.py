@@ -85,10 +85,20 @@ async def _send_email_core(
     )
 
     # ---------------- SEND EMAIL (ALWAYS) ----------------
+    final_message = message
+
+    # 🔗 Append large-file share link if present
+    share_link = None
+    if isinstance(attachments, dict):
+        share_link = attachments.get("share_link")
+
+    if share_link:
+        final_message += f"\n\nLarge drawings link:\n{share_link}"
+
     send_project_email(
         to_email=vendor_email,
         subject=subject,
-        body=message,
+        body=final_message,
         attachments=resolved_attachments,
     )
 
