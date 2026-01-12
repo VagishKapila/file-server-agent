@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+import hashlib
 
 from app.db import get_db
 from app.services.inbound_email_matcher import match_inbound_email
@@ -10,6 +11,12 @@ from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 
 router = APIRouter()
 
+
+def generate_fallback_message_id(from_email, to_email, subject, body) -> str:
+    raw = f"{from_email}|{to_email}|{subject}|{body}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 @router.post("/sendgrid/inbound")
 async def inbound_email(
     request: Request,
@@ -17,32 +24,42 @@ async def inbound_email(
 ):
     form = await request.form()
 
-    headers = form.get("headers", "")
+    headers = form.get("headers")
     subject = form.get("subject", "")
     from_email = form.get("from", "")
     to_email = form.get("to", "")
     text_body = form.get("text", "")
     html_body = form.get("html", "")
 
-    # 1️⃣ Save inbound email
-    result = await db.execute(
-        text("""
-            INSERT INTO inbound_emails
-            (message_id, from_email, to_email, subject, raw_text, raw_html)
-            VALUES (:message_id, :from_email, :to_email, :subject, :raw_text, :raw_html)
-            RETURNING id
-        """),
-        {
-            "message_id": headers,
-            "from_email": from_email,
-            "to_email": to_email,
-            "subject": subject,
-            "raw_text": text_body,
-            "raw_html": html_body,
-        },
-    )
-    inbound_email_id = result.scalar_one()
-    await db.commit()
+    message_id = headers
+    if not message_id:
+        message_id = generate_fallback_message_id(
+            from_email, to_email, subject, text_body or html_body
+        )
+
+    # 1️⃣ Save inbound email (idempotent)
+    try:
+        result = await db.execute(
+            text("""
+                INSERT INTO inbound_emails
+                (message_id, from_email, to_email, subject, raw_text, raw_html)
+                VALUES (:message_id, :from_email, :to_email, :subject, :raw_text, :raw_html)
+                RETURNING id
+            """),
+            {
+                "message_id": message_id,
+                "from_email": from_email,
+                "to_email": to_email,
+                "subject": subject,
+                "raw_text": text_body,
+                "raw_html": html_body,
+            },
+        )
+        inbound_email_id = result.scalar_one()
+        await db.commit()
+    except Exception:
+        # Duplicate message — safe ignore
+        return {"status": "duplicate"}
 
     # 2️⃣ Match to project
     project_id = await match_inbound_email(inbound_email_id, db)
@@ -55,11 +72,11 @@ async def inbound_email(
         db=db,
     )
 
-    # 4️⃣ Parse bid (FIXED)
+    # 4️⃣ Parse bid
     if material_bid_id:
-        await parse_material_bid(material_bid_id, db)
+        await parse_material_bid(material_bid_id)
 
-    # 5️⃣ Auto-forward vendor reply to client
+    # 5️⃣ AUTO-FORWARD TO CLIENT
     client = await db.execute(
         text("""
             SELECT email FROM user_profiles
