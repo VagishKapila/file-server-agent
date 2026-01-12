@@ -2,6 +2,8 @@ from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import hashlib
+import uuid
+import re
 
 from app.db import get_db
 from app.services.inbound_email_matcher import match_inbound_email
@@ -12,7 +14,24 @@ from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 router = APIRouter()
 
 
+def extract_message_id(headers: str | None) -> str | None:
+    """
+    Extract RFC Message-ID from raw email headers.
+    """
+    if not headers:
+        return None
+
+    match = re.search(r"Message-ID:\s*<?([^>\s]+)>?", headers, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    return None
+
+
 def generate_fallback_message_id(from_email, to_email, subject, body) -> str:
+    """
+    Deterministic fallback for idempotency when Message-ID is missing.
+    """
     raw = f"{from_email}|{to_email}|{subject}|{body}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -31,19 +50,25 @@ async def inbound_email(
     text_body = form.get("text", "")
     html_body = form.get("html", "")
 
-    message_id = headers
+    # 🔐 Proper Message-ID handling
+    message_id = extract_message_id(headers)
+
     if not message_id:
         message_id = generate_fallback_message_id(
-            from_email, to_email, subject, text_body or html_body
+            from_email,
+            to_email,
+            subject,
+            text_body or html_body,
         )
 
-    # 1️⃣ Save inbound email (idempotent)
+    # 1️⃣ Save inbound email (idempotent insert)
     try:
         result = await db.execute(
             text("""
                 INSERT INTO inbound_emails
                 (message_id, from_email, to_email, subject, raw_text, raw_html)
                 VALUES (:message_id, :from_email, :to_email, :subject, :raw_text, :raw_html)
+                ON CONFLICT (message_id) DO NOTHING
                 RETURNING id
             """),
             {
@@ -55,11 +80,17 @@ async def inbound_email(
                 "raw_html": html_body,
             },
         )
-        inbound_email_id = result.scalar_one()
+
+        row = result.fetchone()
+        if not row:
+            return {"status": "duplicate"}
+
+        inbound_email_id = row[0]
         await db.commit()
-    except Exception:
-        # Duplicate message — safe ignore
-        return {"status": "duplicate"}
+
+    except Exception as e:
+        await db.rollback()
+        raise e
 
     # 2️⃣ Match to project
     project_id = await match_inbound_email(inbound_email_id, db)
