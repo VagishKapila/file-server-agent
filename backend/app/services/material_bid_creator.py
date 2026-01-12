@@ -1,5 +1,8 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def create_material_bid_from_email(
@@ -8,13 +11,13 @@ async def create_material_bid_from_email(
 ):
     """
     Convert a matched inbound email into a material bid.
-    Auto-creates material_request if missing.
+    Uses project_requests directly (no material_requests table).
     """
 
-    # 1️⃣ Fetch inbound email (must be matched to a project)
+    # 1️⃣ Fetch inbound email (must be matched)
     result = await db.execute(
         text("""
-            SELECT *
+            SELECT id, from_email, raw_text, raw_html, project_request_id
             FROM inbound_emails
             WHERE id = :id
               AND project_request_id IS NOT NULL
@@ -26,44 +29,9 @@ async def create_material_bid_from_email(
     if not email:
         return None
 
-    project_id = email["project_request_id"]
-    material_request_id = email.get("material_request_id")
+    project_request_id = email["project_request_id"]
 
-    # 2️⃣ Ensure material_request exists
-    if not material_request_id:
-        try:
-            result = await db.execute(
-                text("""
-                    INSERT INTO material_requests
-                    (project_request_id, source, status)
-                    VALUES (:pid, 'email_reply', 'open')
-                    RETURNING id
-                """),
-                {"pid": project_request_id},
-            )
-            material_request_id = result.scalar_one()
-        except Exception as e:
-            logger.error(
-                "Failed to create material_request",
-                extra={
-                    "project_request_id": project_request_id,
-                    "error": str(e),
-                },
-            )
-            return None
-        material_request_id = result.scalar_one()
-
-        # Backfill inbound email
-        await db.execute(
-            text("""
-                UPDATE inbound_emails
-                SET material_request_id = :mrid
-                WHERE id = :id
-            """),
-            {"mrid": material_request_id, "id": inbound_email_id},
-        )
-
-    # 3️⃣ Prevent duplicate bids
+    # 2️⃣ Prevent duplicate material bids
     result = await db.execute(
         text("""
             SELECT id
@@ -77,38 +45,49 @@ async def create_material_bid_from_email(
     if existing:
         return existing["id"]
 
-    # 4️⃣ Create material bid
-    result = await db.execute(
-        text("""
-            INSERT INTO material_bids
-            (
-                material_request_id,
-                vendor_email,
-                inbound_email_id,
-                raw_message,
-                status
-            )
-            VALUES
-            (
-                :material_request_id,
-                :vendor_email,
-                :inbound_email_id,
-                :raw_message,
-                'received'
-            )
-            RETURNING id
-        """),
-        {
-            "material_request_id": material_request_id,
-            "vendor_email": email["from_email"],
-            "inbound_email_id": inbound_email_id,
-            "raw_message": email["raw_text"] or email["raw_html"],
-        },
-    )
+    # 3️⃣ Create material bid
+    try:
+        result = await db.execute(
+            text("""
+                INSERT INTO material_bids
+                (
+                    project_request_id,
+                    vendor_email,
+                    inbound_email_id,
+                    raw_message,
+                    status
+                )
+                VALUES
+                (
+                    :project_request_id,
+                    :vendor_email,
+                    :inbound_email_id,
+                    :raw_message,
+                    'received'
+                )
+                RETURNING id
+            """),
+            {
+                "project_request_id": project_request_id,
+                "vendor_email": email["from_email"],
+                "inbound_email_id": inbound_email_id,
+                "raw_message": email["raw_text"] or email["raw_html"],
+            },
+        )
+        bid_id = result.scalar_one()
 
-    bid_id = result.scalar_one()
+    except Exception as e:
+        logger.error(
+            "Failed to create material bid",
+            extra={
+                "inbound_email_id": inbound_email_id,
+                "project_request_id": project_request_id,
+                "error": str(e),
+            },
+        )
+        return None
 
-    # 5️⃣ Mark inbound email as processed
+    # 4️⃣ Mark inbound email as processed
     await db.execute(
         text("""
             UPDATE inbound_emails
