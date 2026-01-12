@@ -2,8 +2,8 @@ from fastapi import APIRouter, Request, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import hashlib
-import uuid
 import re
+import logging
 
 from app.db import get_db
 from app.services.inbound_email_matcher import match_inbound_email
@@ -12,6 +12,7 @@ from app.services.material_bid_parser import parse_material_bid
 from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def extract_message_id(headers: str | None) -> str | None:
@@ -21,16 +22,23 @@ def extract_message_id(headers: str | None) -> str | None:
     if not headers:
         return None
 
-    match = re.search(r"Message-ID:\s*<?([^>\s]+)>?", headers, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
+    match = re.search(
+        r"Message-ID:\s*<?([^>\s]+)>?",
+        headers,
+        re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
 
-    return None
 
-
-def generate_fallback_message_id(from_email, to_email, subject, body) -> str:
+def generate_fallback_message_id(
+    from_email: str,
+    to_email: str,
+    subject: str,
+    body: str,
+) -> str:
     """
-    Deterministic fallback for idempotency when Message-ID is missing.
+    Deterministic fallback ID to ensure idempotency
+    when Message-ID is missing.
     """
     raw = f"{from_email}|{to_email}|{subject}|{body}"
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -50,7 +58,7 @@ async def inbound_email(
     text_body = form.get("text", "")
     html_body = form.get("html", "")
 
-    # 🔐 Proper Message-ID handling
+    # 🔐 Message-ID handling
     message_id = extract_message_id(headers)
 
     if not message_id:
@@ -61,7 +69,17 @@ async def inbound_email(
             text_body or html_body,
         )
 
-    # 1️⃣ Save inbound email (idempotent insert)
+    logger.info(
+        "Inbound email received",
+        extra={
+            "message_id": message_id,
+            "from": from_email,
+            "to": to_email,
+            "subject": subject,
+        },
+    )
+
+    # 1️⃣ Idempotent insert
     try:
         result = await db.execute(
             text("""
@@ -83,31 +101,32 @@ async def inbound_email(
 
         row = result.fetchone()
         if not row:
+            await db.rollback()
             return {"status": "duplicate"}
 
         inbound_email_id = row[0]
         await db.commit()
 
-    except Exception as e:
+    except Exception:
         await db.rollback()
-        raise e
+        raise
 
-    # 2️⃣ Match to project
+    # 2️⃣ Match email to project
     project_id = await match_inbound_email(inbound_email_id, db)
     if not project_id:
         return {"status": "ignored"}
 
-    # 3️⃣ Create material bid
+    # 3️⃣ Create material bid (idempotent by inbound_email_id)
     material_bid_id = await create_material_bid_from_email(
         inbound_email_id=inbound_email_id,
         db=db,
     )
 
-    # 4️⃣ Parse bid
+    # 4️⃣ Parse material bid
     if material_bid_id:
         await parse_material_bid(material_bid_id)
 
-    # 5️⃣ AUTO-FORWARD TO CLIENT
+    # 5️⃣ Forward vendor reply to client
     client = await db.execute(
         text("""
             SELECT email FROM user_profiles
@@ -118,6 +137,7 @@ async def inbound_email(
         """),
         {"pid": project_id},
     )
+
     client_row = client.mappings().first()
 
     if client_row:
