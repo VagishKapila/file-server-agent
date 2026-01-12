@@ -1,90 +1,64 @@
-from fastapi import APIRouter, Request, HTTPException
-from pathlib import Path
-import os
-import uuid
-import shutil
-from datetime import datetime
-
-from app.db import database  # assumes async db wrapper you already use
+from fastapi import APIRouter, Request
+from app.db import database
+from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 
 router = APIRouter()
 
-UPLOAD_DIR = os.getenv("UPLOAD_DIR")
-if not UPLOAD_DIR:
-    raise RuntimeError("UPLOAD_DIR not set")
+@router.post("/webhooks/sendgrid/inbound")
+async def inbound_email(req: Request):
+    form = await req.form()
 
-BASE_INBOUND_DIR = Path(UPLOAD_DIR) / "inbound_emails"
-BASE_INBOUND_DIR.mkdir(parents=True, exist_ok=True)
+    sg_message_id = form.get("sg_message_id")
+    body = form.get("text") or form.get("html") or ""
+    from_email = form.get("from", "")
+    subject = form.get("subject", "")
 
+    if not sg_message_id:
+        return {"status": "missing_message_id"}
 
-@router.post("/sendgrid/inbound")
-async def sendgrid_inbound(request: Request):
-    """
-    Primary SendGrid Inbound Parse webhook
-    """
-    form = await request.form()
+    # 1️⃣ Find outreach by SendGrid message id
+    outreach = await database.fetch_one("""
+        SELECT id, project_id
+        FROM supplier_outreach
+        WHERE message_id = :msg
+        LIMIT 1
+    """, {"msg": sg_message_id})
 
-    # ---- Core fields ----
-    message_id = form.get("headers")
-    from_email = form.get("from")
-    to_email = form.get("to")
-    subject = form.get("subject")
-    text = form.get("text")
-    html = form.get("html")
+    if not outreach:
+        return {"status": "ignored"}
 
-    received_at = datetime.utcnow()
+    # 2️⃣ Save vendor response
+    await database.execute("""
+        INSERT INTO supplier_responses
+        (supplier_outreach_id, raw_message)
+        VALUES (:oid, :body)
+    """, {
+        "oid": outreach["id"],
+        "body": body
+    })
 
-    # ---- Insert inbound_emails ----
-    insert_email_query = """
-        INSERT INTO inbound_emails
-        (message_id, from_email, to_email, subject, raw_text, raw_html, received_at)
-        VALUES (:message_id, :from_email, :to_email, :subject, :raw_text, :raw_html, :received_at)
-        RETURNING id
-    """
+    await database.execute("""
+        UPDATE supplier_outreach
+        SET status='replied'
+        WHERE id=:id
+    """, {"id": outreach["id"]})
 
-    inbound_email_id = await database.fetch_val(
-        insert_email_query,
-        {
-            "message_id": message_id,
-            "from_email": from_email,
-            "to_email": to_email,
-            "subject": subject,
-            "raw_text": text,
-            "raw_html": html,
-            "received_at": received_at,
-        }
-    )
+    # 3️⃣ Fetch client email for CC
+    client = await database.fetch_one("""
+        SELECT up.email
+        FROM project_requests pr
+        JOIN user_profiles up ON up.id = pr.user_id
+        WHERE pr.id = :pid
+        LIMIT 1
+    """, {"pid": outreach["project_id"]})
 
-    # ---- File system path ----
-    email_dir = BASE_INBOUND_DIR / str(inbound_email_id)
-    attachments_dir = email_dir / "attachments"
-    attachments_dir.mkdir(parents=True, exist_ok=True)
-
-    # ---- Save attachments ----
-    for key, value in form.items():
-        if hasattr(value, "filename") and value.filename:
-            file_id = str(uuid.uuid4())
-            safe_name = value.filename.replace("/", "_")
-            file_path = attachments_dir / f"{file_id}_{safe_name}"
-
-            with open(file_path, "wb") as f:
-                shutil.copyfileobj(value.file, f)
-
-            insert_attachment_query = """
-                INSERT INTO inbound_attachments
-                (inbound_email_id, filename, file_path, content_type, file_size)
-                VALUES (:inbound_email_id, :filename, :file_path, :content_type, :file_size)
-            """
-
-            await database.execute(
-                insert_attachment_query,
-                {
-                    "inbound_email_id": inbound_email_id,
-                    "filename": safe_name,
-                    "file_path": str(file_path),
-                    "content_type": value.content_type,
-                    "file_size": file_path.stat().st_size,
-                }
-            )
+    # 4️⃣ Forward reply to client (silent CC)
+    if client and client["email"]:
+        await forward_vendor_reply_to_client(
+            client_email=client["email"],
+            vendor_email=from_email,
+            subject=subject,
+            body=body
+        )
 
     return {"status": "ok"}
