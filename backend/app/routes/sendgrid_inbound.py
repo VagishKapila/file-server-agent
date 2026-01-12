@@ -6,9 +6,9 @@ from app.db import get_db
 from app.services.inbound_email_matcher import match_inbound_email
 from app.services.material_bid_creator import create_material_bid_from_email
 from app.services.material_bid_parser import parse_material_bid
+from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 
 router = APIRouter()
-
 
 @router.post("/sendgrid/inbound")
 async def inbound_email(
@@ -57,6 +57,27 @@ async def inbound_email(
 
     # 4️⃣ Parse bid
     if material_bid_id:
-        await parse_material_bid(material_bid_id, db)
+        await parse_material_bid(material_bid_id)
+
+    # 5️⃣ AUTO-FORWARD TO CLIENT
+    client = await db.execute(
+        text("""
+            SELECT email FROM user_profiles
+            WHERE id = (
+                SELECT user_id FROM project_requests
+                WHERE id = :pid
+            )
+        """),
+        {"pid": project_id},
+    )
+    client_row = client.mappings().first()
+
+    if client_row:
+        await forward_vendor_reply_to_client(
+            client_row["email"],
+            from_email,
+            subject,
+            text_body or html_body,
+        )
 
     return {"status": "ok"}
