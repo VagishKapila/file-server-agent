@@ -2,29 +2,28 @@ import os
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-SENDGRID_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("OUTBOUND_FROM_EMAIL", "procurement@bainsdevcommercial.com")
 
 async def forward_vendor_reply_to_client(
     client_email: str,
     vendor_email: str,
     subject: str,
-    body: str
+    body: str,
 ):
-    if not client_email:
-        return
+    """
+    CC vendor reply to client automatically
+    """
 
     message = Mail(
-        from_email=FROM_EMAIL,
+        from_email=("noreply@bainsdevcommercial.com", "BAINS Materials AI"),
         to_emails=client_email,
-        subject=f"Vendor Reply: {subject}",
+        subject=f"[Vendor Reply] {subject}",
         plain_text_content=f"""
-Vendor Email: {vendor_email}
+Vendor: {vendor_email}
 
---- MESSAGE ---
+--- Reply ---
 {body}
-"""
+""",
     )
 
-    sg = SendGridAPIClient(SENDGRID_KEY)
+    sg = SendGridAPIClient(os.environ["SENDGRID_API_KEY"])
     sg.send(message)

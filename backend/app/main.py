@@ -16,6 +16,7 @@ from app.routes.browser_email import router as browser_email_router
 from app.routes.retell_webhook import router as retell_webhook_router
 from app.routes.sendgrid_inbound import router as sendgrid_inbound_router
 from app.routes.material_vendor_inbox import router as material_inbox_router
+from app.routes.material_bid_comparison import router as bid_compare_router
 
 from app.routes import (
     subs_routes,
@@ -109,6 +110,7 @@ app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
 app.include_router(sendgrid_inbound_router)
 app.include_router(material_inbox_router)
+app.include_router(bid_compare_router)
 
 print("🔥 RUNNING app.main 🔥")
 
