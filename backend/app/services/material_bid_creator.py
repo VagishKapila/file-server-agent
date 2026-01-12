@@ -31,15 +31,26 @@ async def create_material_bid_from_email(
 
     # 2️⃣ Ensure material_request exists
     if not material_request_id:
-        result = await db.execute(
-            text("""
-                INSERT INTO material_requests
-                (project_request_id, source, status)
-                VALUES (:project_id, 'email_reply', 'open')
-                RETURNING id
-            """),
-            {"project_id": project_id},
-        )
+        try:
+            result = await db.execute(
+                text("""
+                    INSERT INTO material_requests
+                    (project_request_id, source, status)
+                    VALUES (:pid, 'email_reply', 'open')
+                    RETURNING id
+                """),
+                {"pid": project_request_id},
+            )
+            material_request_id = result.scalar_one()
+        except Exception as e:
+            logger.error(
+                "Failed to create material_request",
+                extra={
+                    "project_request_id": project_request_id,
+                    "error": str(e),
+                },
+            )
+            return None
         material_request_id = result.scalar_one()
 
         # Backfill inbound email
