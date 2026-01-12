@@ -55,11 +55,11 @@ async def inbound_email(
         db=db,
     )
 
-    # 4️⃣ Parse bid
+    # 4️⃣ Parse bid (FIXED)
     if material_bid_id:
-        await parse_material_bid(material_bid_id)
+        await parse_material_bid(material_bid_id, db)
 
-    # 5️⃣ AUTO-FORWARD TO CLIENT
+    # 5️⃣ Auto-forward vendor reply to client
     client = await db.execute(
         text("""
             SELECT email FROM user_profiles
