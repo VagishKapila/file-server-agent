@@ -1,33 +1,47 @@
 import os
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from typing import Optional
+
 
 async def forward_vendor_reply_to_client(
     client_email: str,
     vendor_email: str,
     subject: str,
     body: str,
-):
+) -> dict:
     """
-    Forward vendor reply to client automatically
+    Forward vendor reply to client email.
+    Safe to call even if SendGrid is not installed.
     """
 
-    forward_subject = f"[Vendor Reply] {subject}"
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+    except ImportError:
+        # SendGrid not installed yet — fail soft
+        return {
+            "status": "skipped",
+            "reason": "sendgrid_not_installed",
+        }
 
-    forward_body = f"""
-Vendor Email: {vendor_email}
+    api_key = os.environ.get("SENDGRID_API_KEY")
+    if not api_key:
+        return {
+            "status": "skipped",
+            "reason": "missing_sendgrid_api_key",
+        }
 
-----------------------------
-{body}
-----------------------------
-"""
+    sg = SendGridAPIClient(api_key)
 
     message = Mail(
-        from_email=os.environ.get("DEFAULT_FROM_EMAIL"),
+        from_email=vendor_email,
         to_emails=client_email,
-        subject=forward_subject,
-        plain_text_content=forward_body,
+        subject=f"Vendor Reply: {subject}",
+        plain_text_content=body,
     )
 
-    sg = SendGridAPIClient(os.environ["SENDGRID_API_KEY"])
-    sg.send(message)
+    response = sg.send(message)
+
+    return {
+        "status": "forwarded",
+        "message_id": response.headers.get("X-Message-Id"),
+    }
