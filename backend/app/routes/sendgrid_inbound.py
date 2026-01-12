@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request
-from app.db import db
+import app.db as db
+
 from app.services.inbound_email_matcher import match_inbound_email
 from app.services.material_bid_creator import create_material_bid_from_email
 from app.services.material_bid_parser import parse_material_bid
@@ -8,10 +9,6 @@ router = APIRouter()
 
 @router.post("/sendgrid/inbound")
 async def inbound_email(request: Request):
-    """
-    SendGrid Inbound Parse webhook
-    """
-
     form = await request.form()
 
     headers = form.get("headers", "")
