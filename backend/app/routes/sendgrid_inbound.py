@@ -46,7 +46,6 @@ async def inbound_email(
 
     # 2️⃣ Match to project
     project_id = await match_inbound_email(inbound_email_id, db)
-
     if not project_id:
         return {"status": "ignored"}
 
