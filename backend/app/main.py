@@ -9,13 +9,13 @@ from pathlib import Path
 # ---------------- DB ----------------
 from app.db import connect_to_db, close_db_connection
 
-# ---------------- ROUTES (APP) ----------------
+# ---------------- ROUTES ----------------
 from app.routes.auth import router as auth_router
 from app.routes.auth_google import router as auth_google_router
 from app.routes.browser_email import router as browser_email_router
 from app.routes.retell_webhook import router as retell_webhook_router
 from app.routes.sendgrid_inbound import router as sendgrid_inbound_router
-
+from app.routes.material_vendor_inbox import router as material_inbox_router
 
 from app.routes import (
     subs_routes,
@@ -34,7 +34,6 @@ from app.routes.sub_calls import router as sub_calls_router
 from app.routes.search_routes import router as search_router
 from app.routes.project_search import router as project_search_router
 
-# ✅ correct path (modules is sibling of app/)
 from modules.vendors.routes.vendor_routes import router as vendor_router
 
 from app.routes.negotiator_webhook import router as negotiator_router
@@ -109,6 +108,7 @@ app.include_router(admin_beta_router)
 app.include_router(browser_email_router)
 app.include_router(retell_webhook_router)
 app.include_router(sendgrid_inbound_router)
+app.include_router(material_inbox_router)
 
 print("🔥 RUNNING app.main 🔥")
 
@@ -121,35 +121,9 @@ def root():
 def health():
     return {"ok": True}
 
-# ---------------- DEBUG ----------------
-@app.get("/debug/env")
-def debug_env():
-    return {
-        "FILE_SERVER_BASE_URL": os.getenv("FILE_SERVER_BASE_URL"),
-        "UPLOAD_DIR": os.getenv("UPLOAD_DIR"),
-        "VAPI_API_KEY_loaded": bool(os.getenv("VAPI_API_KEY")),
-        "VAPI_PRIVATE_KEY_loaded": bool(os.getenv("VAPI_PRIVATE_KEY")),
-        "VAPI_ASSISTANT_ID": os.getenv("VAPI_ASSISTANT_ID"),
-        "VAPI_PHONE_NUMBER_ID": os.getenv("VAPI_PHONE_NUMBER_ID"),
-    }
-
-@app.get("/debug/vapi-env")
-def debug_vapi_env():
-    return {
-        "VAPI_PHONE_NUMBER_ID": os.getenv("VAPI_PHONE_NUMBER_ID"),
-        "VAPI_ASSISTANT_ID": os.getenv("VAPI_ASSISTANT_ID"),
-    }
-
 @app.get("/_routes")
 def show_routes():
     return [r.path for r in app.routes]
-
-@app.get("/__fingerprint")
-def fingerprint():
-    return {
-        "file": "app.main",
-        "status": "correct app loaded",
-    }
 
 # ---------------- FILES ----------------
 @app.get("/files/{filename}")

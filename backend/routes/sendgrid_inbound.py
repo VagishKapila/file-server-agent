@@ -1,37 +1,58 @@
-from flask import Blueprint, request
-from db import db
+from fastapi import APIRouter, Request
+from app.db import database
+from app.services.inbound_email_matcher import match_inbound_email
+from app.services.material_bid_creator import create_material_bid_from_email
+from app.services.material_bid_parser import parse_material_bid
 
-sendgrid_inbound = Blueprint("sendgrid_inbound", __name__)
+router = APIRouter()
 
-@sendgrid_inbound.route("/sendgrid/inbound", methods=["POST"])
-def inbound_email():
-    # SendGrid sends multipart data
-    headers = request.form.get("headers", "")
-    subject = request.form.get("subject", "")
-    from_email = request.form.get("from", "")
-    body = request.form.get("text", "") or request.form.get("html", "")
+@router.post("/sendgrid/inbound")
+async def inbound_email(request: Request):
+    """
+    Handles SendGrid Inbound Parse webhook
+    """
 
-    # Match by SendGrid Message-ID
-    outreach = db.fetch_one("""
-        SELECT id
-        FROM supplier_outreach
-        WHERE %s LIKE '%' || message_id || '%'
-        LIMIT 1
-    """, (headers,))
+    form = await request.form()
 
-    if not outreach:
-        return {"status": "ignored"}, 200
+    headers = form.get("headers", "")
+    subject = form.get("subject", "")
+    from_email = form.get("from", "")
+    text_body = form.get("text", "")
+    html_body = form.get("html", "")
+    body = text_body or html_body
 
-    db.execute("""
-        INSERT INTO supplier_responses
-        (supplier_outreach_id, raw_message)
-        VALUES (%s, %s)
-    """, (outreach["id"], body))
+    # 1️⃣ Save inbound email
+    inbound_email_id = await database.execute("""
+        INSERT INTO inbound_emails
+        (message_id, from_email, to_email, subject, raw_text, raw_html)
+        VALUES (:message_id, :from_email, :to_email, :subject, :raw_text, :raw_html)
+        RETURNING id
+    """, {
+        "message_id": headers,
+        "from_email": from_email,
+        "to_email": form.get("to", ""),
+        "subject": subject,
+        "raw_text": text_body,
+        "raw_html": html_body,
+    })
 
-    db.execute("""
-        UPDATE supplier_outreach
-        SET status = 'replied'
-        WHERE id = %s
-    """, (outreach["id"],))
+    # 2️⃣ Match inbound email → project / material request
+    project_id = await match_inbound_email(inbound_email_id)
 
-    return {"status": "ok"}, 200
+    if not project_id:
+        await database.execute("""
+            INSERT INTO inbound_email_unmatched
+            (inbound_email_id, reason)
+            VALUES (:id, 'no_matching_project')
+        """, {"id": inbound_email_id})
+
+        return {"status": "ignored"}
+
+    # 3️⃣ Create material bid
+    material_bid_id = await create_material_bid_from_email(inbound_email_id)
+
+    # 4️⃣ AI parse bid content
+    if material_bid_id:
+        await parse_material_bid(material_bid_id)
+
+    return {"status": "ok"}
