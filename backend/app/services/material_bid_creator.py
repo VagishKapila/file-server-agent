@@ -2,6 +2,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
+from app.services.vendor_reputation import record_vendor_signal
+
 logger = logging.getLogger(__name__)
 
 
@@ -11,13 +13,18 @@ async def create_material_bid_from_email(
 ):
     """
     Convert a matched inbound email into a material bid.
-    Uses project_requests directly (no material_requests table).
+    Anchored via inbound_emails (project context lives there).
     """
 
-    # 1️⃣ Fetch inbound email (must be matched)
+    # 1️⃣ Fetch inbound email (must be matched to project)
     result = await db.execute(
         text("""
-            SELECT id, from_email, raw_text, raw_html, project_request_id
+            SELECT
+                id,
+                from_email,
+                raw_text,
+                raw_html,
+                project_request_id
             FROM inbound_emails
             WHERE id = :id
               AND project_request_id IS NOT NULL
@@ -27,11 +34,10 @@ async def create_material_bid_from_email(
     email = result.mappings().first()
 
     if not email:
+        logger.info("Inbound email not matched to project", extra={"id": inbound_email_id})
         return None
 
-    project_request_id = email["project_request_id"]
-
-    # 2️⃣ Prevent duplicate material bids
+    # 2️⃣ Prevent duplicate material bids (idempotent per email)
     result = await db.execute(
         text("""
             SELECT id
@@ -51,7 +57,6 @@ async def create_material_bid_from_email(
             text("""
                 INSERT INTO material_bids
                 (
-                    project_request_id,
                     vendor_email,
                     inbound_email_id,
                     raw_message,
@@ -59,7 +64,6 @@ async def create_material_bid_from_email(
                 )
                 VALUES
                 (
-                    :project_request_id,
                     :vendor_email,
                     :inbound_email_id,
                     :raw_message,
@@ -68,7 +72,6 @@ async def create_material_bid_from_email(
                 RETURNING id
             """),
             {
-                "project_request_id": project_request_id,
                 "vendor_email": email["from_email"],
                 "inbound_email_id": inbound_email_id,
                 "raw_message": email["raw_text"] or email["raw_html"],
@@ -81,7 +84,6 @@ async def create_material_bid_from_email(
             "Failed to create material bid",
             extra={
                 "inbound_email_id": inbound_email_id,
-                "project_request_id": project_request_id,
                 "error": str(e),
             },
         )
@@ -96,6 +98,20 @@ async def create_material_bid_from_email(
         """),
         {"id": inbound_email_id},
     )
+
+    # 5️⃣ Derived vendor reputation signal (non-blocking)
+    try:
+        await record_vendor_signal(
+            db=db,
+            vendor_email=email["from_email"],
+            signal="material_bid_received",
+            project_request_id=email["project_request_id"],
+        )
+    except Exception as e:
+        logger.warning(
+            "Vendor reputation signal failed",
+            extra={"error": str(e)},
+        )
 
     await db.commit()
     return bid_id
