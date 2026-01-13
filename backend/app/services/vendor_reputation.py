@@ -1,49 +1,106 @@
+from typing import List, Dict, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-import logging
-
-logger = logging.getLogger(__name__)
 
 
-async def record_vendor_signal(
+# ============================================================
+# VendorAnchor
+# Purpose:
+# - Global vendor reuse across projects/devices
+# - Avoid repeated Google/Yelp calls
+# - Speed + cost control
+# ============================================================
+
+def _normalize_name(name: str | None) -> str:
+    return (
+        (name or "")
+        .lower()
+        .replace(",", "")
+        .replace(".", "")
+        .replace("&", "and")
+        .strip()
+    )
+
+def _anchor_key(name: str, phone: str | None) -> Tuple[str, str]:
+    return (
+        _normalize_name(name),
+        phone or "",
+    )
+
+def apply_vendor_reputation(vendors: list) -> list:
+    """
+    Applies reputation weighting to vendors.
+    Currently a no-op placeholder.
+    """
+    return vendors
+
+# ------------------------------------------------------------
+# Fetch anchored vendors (global reuse)
+# ------------------------------------------------------------
+async def fetch_anchored_vendors(
     db: AsyncSession,
-    vendor_email: str,
-    signal: str,
-    project_request_id: int | None = None,
-):
-    """
-    Derived vendor reputation signal.
-    NO scoring, NO new tables.
-    Uses existing data for future weighting.
-    """
+    trades: List[str],
+    limit: int = 50,
+) -> List[Dict]:
 
-    # Example signals we care about (expand later):
-    # - material_bid_received
-    # - material_bid_parsed
-    # - attachment_provided
-
-    await db.execute(
+    rows = await db.execute(
         text("""
-            INSERT INTO activity_log
-            (
-                entity_type,
-                entity_key,
-                action,
-                metadata
-            )
-            VALUES
-            (
-                'vendor',
-                :vendor_email,
-                :action,
-                jsonb_build_object(
-                    'project_request_id', :project_request_id
-                )
-            )
+            SELECT
+                vendor_name,
+                trade,
+                phone,
+                email,
+                source
+            FROM search_results
+            WHERE trade = ANY(:trades)
+            ORDER BY id DESC
+            LIMIT :limit
         """),
         {
-            "vendor_email": vendor_email,
-            "action": signal,
-            "project_request_id": project_request_id,
+            "trades": trades,
+            "limit": limit,
         },
     )
+
+    vendors = []
+    seen = set()
+
+    for r in rows.fetchall():
+        key = _anchor_key(r.vendor_name, r.phone)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        vendors.append({
+            "name": r.vendor_name,
+            "trade": r.trade,
+            "phone": r.phone,
+            "email": r.email,
+            "callable": bool(r.phone),
+            "preferred": False,
+            "same_city": False,
+            "source": r.source or "db_anchor",
+        })
+
+    return vendors
+
+
+# ------------------------------------------------------------
+# Merge anchors with live discovery
+# ------------------------------------------------------------
+def merge_with_anchors(
+    anchors: List[Dict],
+    live_results: List[Dict],
+) -> List[Dict]:
+
+    merged = []
+    seen = set()
+
+    for v in anchors + live_results:
+        key = _anchor_key(v.get("name"), v.get("phone"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(v)
+
+    return merged
