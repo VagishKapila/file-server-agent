@@ -1,14 +1,12 @@
 from typing import List, Dict, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 
+logger = logging.getLogger(__name__)
 
 # ============================================================
-# VendorAnchor
-# Purpose:
-# - Global vendor reuse across projects/devices
-# - Avoid repeated Google/Yelp calls
-# - Speed + cost control
+# Vendor Anchor Helpers
 # ============================================================
 
 def _normalize_name(name: str | None) -> str:
@@ -21,22 +19,65 @@ def _normalize_name(name: str | None) -> str:
         .strip()
     )
 
-def _anchor_key(name: str, phone: str | None) -> Tuple[str, str]:
-    return (
-        _normalize_name(name),
-        phone or "",
-    )
+def _anchor_key(name: str | None, phone: str | None) -> Tuple[str, str]:
+    return (_normalize_name(name), phone or "")
+
+# ============================================================
+# Vendor Reputation Signals (SAFE NO-OP FOR NOW)
+# ============================================================
+
+async def record_vendor_signal(
+    db: AsyncSession,
+    *,
+    vendor_email: str,
+    project_request_id: int,
+    signal_type: str,
+    signal_value: float | None = None,
+    meta: Dict | None = None,
+):
+    """
+    Records a vendor reputation signal.
+
+    This is intentionally lightweight for v1.
+    Safe to call even if scoring logic is not active yet.
+    """
+
+    try:
+        await db.execute(
+            text("""
+                INSERT INTO vendor_scores
+                (vendor_email, project_request_id, signal_type, signal_value, meta)
+                VALUES (:email, :pid, :stype, :svalue, :meta)
+            """),
+            {
+                "email": vendor_email,
+                "pid": project_request_id,
+                "stype": signal_type,
+                "svalue": signal_value,
+                "meta": meta,
+            },
+        )
+        await db.commit()
+
+    except Exception as e:
+        # NEVER crash ingestion because of reputation tracking
+        logger.warning(
+            "Vendor signal not recorded",
+            extra={
+                "vendor_email": vendor_email,
+                "project_request_id": project_request_id,
+                "signal_type": signal_type,
+                "error": str(e),
+            },
+        )
+
+# ============================================================
+# Existing Anchor Logic (UNCHANGED)
+# ============================================================
 
 def apply_vendor_reputation(vendors: list) -> list:
-    """
-    Applies reputation weighting to vendors.
-    Currently a no-op placeholder.
-    """
     return vendors
 
-# ------------------------------------------------------------
-# Fetch anchored vendors (global reuse)
-# ------------------------------------------------------------
 async def fetch_anchored_vendors(
     db: AsyncSession,
     trades: List[str],
@@ -45,21 +86,13 @@ async def fetch_anchored_vendors(
 
     rows = await db.execute(
         text("""
-            SELECT
-                vendor_name,
-                trade,
-                phone,
-                email,
-                source
+            SELECT vendor_name, trade, phone, email, source
             FROM search_results
             WHERE trade = ANY(:trades)
             ORDER BY id DESC
             LIMIT :limit
         """),
-        {
-            "trades": trades,
-            "limit": limit,
-        },
+        {"trades": trades, "limit": limit},
     )
 
     vendors = []
@@ -84,10 +117,6 @@ async def fetch_anchored_vendors(
 
     return vendors
 
-
-# ------------------------------------------------------------
-# Merge anchors with live discovery
-# ------------------------------------------------------------
 def merge_with_anchors(
     anchors: List[Dict],
     live_results: List[Dict],
