@@ -19,9 +19,6 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------
 
 def extract_message_id(headers: str | None) -> str | None:
-    """
-    Extract RFC Message-ID from raw email headers.
-    """
     if not headers or not headers.strip():
         return None
 
@@ -39,16 +36,12 @@ def generate_fallback_message_id(
     subject: str,
     body: str,
 ) -> str:
-    """
-    Deterministic fallback for curl / malformed payloads.
-    Guarantees idempotency.
-    """
     raw = f"{from_email}|{to_email}|{subject}|{body}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
 # ------------------------------------------------------------
-# Inbound SendGrid webhook
+# Inbound handler
 # ------------------------------------------------------------
 
 @router.post("/sendgrid/inbound")
@@ -65,30 +58,15 @@ async def inbound_email(
     text_body = form.get("text", "") or ""
     html_body = form.get("html", "") or ""
 
-    # --------------------------------------------------------
-    # Message-ID (critical)
-    # --------------------------------------------------------
-    message_id = extract_message_id(headers)
-    if not message_id:
-        message_id = generate_fallback_message_id(
-            from_email,
-            to_email,
-            subject,
-            text_body or html_body,
-        )
-
-    logger.info(
-        "Inbound email received",
-        extra={
-            "message_id": message_id,
-            "from": from_email,
-            "to": to_email,
-            "subject": subject,
-        },
+    message_id = extract_message_id(headers) or generate_fallback_message_id(
+        from_email,
+        to_email,
+        subject,
+        text_body or html_body,
     )
 
     # --------------------------------------------------------
-    # 1️⃣ Idempotent insert into inbound_emails
+    # 1️⃣ Insert inbound email (idempotent)
     # --------------------------------------------------------
     try:
         result = await db.execute(
@@ -127,10 +105,6 @@ async def inbound_email(
         row = result.fetchone()
         if not row:
             await db.rollback()
-            logger.info(
-                "Duplicate inbound email ignored",
-                extra={"message_id": message_id},
-            )
             return {"status": "duplicate"}
 
         inbound_email_id = row[0]
@@ -138,36 +112,41 @@ async def inbound_email(
 
     except Exception:
         await db.rollback()
-        logger.exception("Failed inserting inbound email")
+        logger.exception("Inbound email insert failed")
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 2️⃣–5️⃣ Processing pipeline (guarded)
+    # 2️⃣–4️⃣ Core pipeline (guarded)
     # --------------------------------------------------------
     try:
-        # 2️⃣ Match email to project
         project_id = await match_inbound_email(inbound_email_id, db)
         if not project_id:
             await db.rollback()
             return {"status": "ignored"}
 
-        # 3️⃣ Create material bid
         material_bid_id = await create_material_bid_from_email(
             inbound_email_id=inbound_email_id,
             db=db,
         )
 
-        # 4️⃣ Parse material bid (non-fatal)
         if material_bid_id:
             try:
                 await parse_material_bid(material_bid_id)
             except Exception:
-                logger.exception(
-                    "Material bid parsing failed",
-                    extra={"material_bid_id": material_bid_id},
-                )
+                logger.exception("Bid parsing failed")
+                await db.rollback()  # 🔥 CRITICAL FIX
+            else:
+                await db.commit()
 
-        # 5️⃣ Forward vendor reply to client
+    except Exception:
+        await db.rollback()
+        logger.exception("Inbound processing failed")
+        return {"status": "error"}
+
+    # --------------------------------------------------------
+    # 5️⃣ Client forwarding (NEW CLEAN TRANSACTION)
+    # --------------------------------------------------------
+    try:
         client = await db.execute(
             text("""
                 SELECT email
@@ -184,28 +163,17 @@ async def inbound_email(
         client_row = client.mappings().first()
 
         if client_row:
-            try:
-                await forward_vendor_reply_to_client(
-                    client_row["email"],
-                    from_email,
-                    subject,
-                    text_body or html_body,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed forwarding vendor reply to client",
-                    extra={"project_id": project_id},
-                )
+            await forward_vendor_reply_to_client(
+                client_row["email"],
+                from_email,
+                subject,
+                text_body or html_body,
+            )
 
-        return {"status": "ok"}
+        await db.commit()
 
-    except Exception as e:
-        logger.exception(
-            "Inbound email processing failed",
-            extra={
-                "inbound_email_id": inbound_email_id,
-                "error": str(e),
-            },
-        )
+    except Exception:
         await db.rollback()
-        return {"status": "error"}
+        logger.exception("Client forward failed")
+
+    return {"status": "ok"}
