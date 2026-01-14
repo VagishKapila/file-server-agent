@@ -3,8 +3,6 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.vendor_pricing_normalizer import normalize_price
-
 logger = logging.getLogger(__name__)
 
 PRICE_RE = re.compile(r"\$ ?([\d,]+(?:\.\d+)?)")
@@ -16,92 +14,87 @@ async def parse_material_bid(
     db: AsyncSession,
 ):
     """
-    Parse pricing + lead time from vendor email
-    and persist normalized bid items.
+    Parse raw vendor email content into structured bid items.
+    This version is schema-safe and does NOT depend on suppliers table.
     """
 
-    # ------------------------------------------------------------
-    # 1️⃣ Fetch material bid + supplier context
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
+    # 1️⃣ Fetch bid message
+    # --------------------------------------------------------
     result = await db.execute(
         text("""
             SELECT
-                mb.raw_message,
-                s.country_code
-            FROM material_bids mb
-            LEFT JOIN suppliers s ON s.email = mb.vendor_email
-            WHERE mb.id = :id
+                raw_message
+            FROM material_bids
+            WHERE id = :id
         """),
         {"id": material_bid_id},
     )
-    bid = result.mappings().first()
 
+    bid = result.mappings().first()
     if not bid:
-        logger.warning(
-            "Material bid not found for parsing",
-            extra={"material_bid_id": material_bid_id},
-        )
+        logger.warning("Material bid not found", extra={"id": material_bid_id})
         return
 
     text_body = bid["raw_message"] or ""
-    country = bid["country_code"] or "US"
 
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     # 2️⃣ Extract pricing + lead time
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
     prices = PRICE_RE.findall(text_body)
     lead = LEAD_RE.search(text_body)
 
     unit_price = prices[0].replace(",", "") if prices else None
-    pricing = normalize_price(unit_price, country) if unit_price else {}
+    lead_time = lead.group(0) if lead else None
 
-    # ------------------------------------------------------------
-    # 3️⃣ Update material_bids summary
-    # ------------------------------------------------------------
-    await db.execute(
-        text("""
-            UPDATE material_bids
-            SET
-                status = 'parsed',
-                source_country = :country,
-                fx_rate = :fx,
-                landed_unit_price = :landed
-            WHERE id = :id
-        """),
-        {
-            "id": material_bid_id,
-            "country": country,
-            "fx": pricing.get("fx_rate"),
-            "landed": pricing.get("landed_unit_price"),
-        },
-    )
-
-    # ------------------------------------------------------------
-    # 4️⃣ Insert material_bid_items
-    # ------------------------------------------------------------
+    # --------------------------------------------------------
+    # 3️⃣ Insert parsed item (idempotent per bid)
+    # --------------------------------------------------------
     await db.execute(
         text("""
             INSERT INTO material_bid_items
             (
                 material_bid_id,
-                notes,
                 unit_price,
-                lead_time
+                lead_time,
+                notes
             )
             VALUES
             (
                 :bid_id,
-                :notes,
-                :price,
-                :lead
+                :unit_price,
+                :lead_time,
+                :notes
             )
+            ON CONFLICT DO NOTHING
         """),
         {
             "bid_id": material_bid_id,
+            "unit_price": unit_price,
+            "lead_time": lead_time,
             "notes": text_body[:500],
-            "price": unit_price,
-            "lead": lead.group(0) if lead else None,
         },
     )
 
-    await db.commit()
+    # --------------------------------------------------------
+    # 4️⃣ Update bid status + defaults
+    # --------------------------------------------------------
+    await db.execute(
+        text("""
+            UPDATE material_bids
+            SET
+                status = 'parsed',
+                source_country = COALESCE(source_country, 'US')
+            WHERE id = :id
+        """),
+        {"id": material_bid_id},
+    )
+
+    logger.info(
+        "Material bid parsed",
+        extra={
+            "material_bid_id": material_bid_id,
+            "unit_price": unit_price,
+            "lead_time": lead_time,
+        },
+    )
