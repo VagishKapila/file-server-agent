@@ -75,7 +75,7 @@ async def inbound_email(
     )
 
     # --------------------------------------------------------
-    # 1️⃣ Insert inbound email (idempotent)
+    # 1) Insert inbound email (idempotent)
     # --------------------------------------------------------
     try:
         result = await db.execute(
@@ -126,24 +126,19 @@ async def inbound_email(
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 2️⃣ Match email to project
+    # 2) Match email to project
     # --------------------------------------------------------
     try:
         project_id = await match_inbound_email(inbound_email_id, db)
         if not project_id:
-            logger.info(
-                "Inbound email not matched to project",
-                extra={"inbound_email_id": inbound_email_id},
-            )
             return {"status": "ignored"}
-
     except Exception:
         await db.rollback()
         logger.exception("Project matching failed")
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 3️⃣ Create material bid
+    # 3) Create material bid
     # --------------------------------------------------------
     try:
         material_bid_id = await create_material_bid_from_email(
@@ -156,14 +151,17 @@ async def inbound_email(
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 4️⃣ Parse material bid (safe + isolated)
+    # 4) Parse material bid (PASS db, commit/rollback cleanly)
     # --------------------------------------------------------
     if material_bid_id:
         try:
-            await parse_material_bid(material_bid_id)
+            await parse_material_bid(material_bid_id, db)
             await db.commit()
         except Exception:
             await db.rollback()
-            logger.exception("Material bid parsing failed")
+            logger.exception(
+                "Material bid parsing failed",
+                extra={"material_bid_id": material_bid_id},
+            )
 
     return {"status": "ok"}
