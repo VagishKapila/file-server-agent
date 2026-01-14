@@ -9,7 +9,6 @@ from app.db import get_db
 from app.services.inbound_email_matcher import match_inbound_email
 from app.services.material_bid_creator import create_material_bid_from_email
 from app.services.material_bid_parser import parse_material_bid
-from app.services.client_reply_forwarder import forward_vendor_reply_to_client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -65,6 +64,16 @@ async def inbound_email(
         text_body or html_body,
     )
 
+    logger.info(
+        "Inbound email received",
+        extra={
+            "message_id": message_id,
+            "from": from_email,
+            "to": to_email,
+            "subject": subject,
+        },
+    )
+
     # --------------------------------------------------------
     # 1️⃣ Insert inbound email (idempotent)
     # --------------------------------------------------------
@@ -105,6 +114,7 @@ async def inbound_email(
         row = result.fetchone()
         if not row:
             await db.rollback()
+            logger.info("Duplicate inbound email ignored", extra={"message_id": message_id})
             return {"status": "duplicate"}
 
         inbound_email_id = row[0]
@@ -116,64 +126,44 @@ async def inbound_email(
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 2️⃣–4️⃣ Core pipeline (guarded)
+    # 2️⃣ Match email to project
     # --------------------------------------------------------
     try:
         project_id = await match_inbound_email(inbound_email_id, db)
         if not project_id:
-            await db.rollback()
+            logger.info(
+                "Inbound email not matched to project",
+                extra={"inbound_email_id": inbound_email_id},
+            )
             return {"status": "ignored"}
 
+    except Exception:
+        await db.rollback()
+        logger.exception("Project matching failed")
+        return {"status": "error"}
+
+    # --------------------------------------------------------
+    # 3️⃣ Create material bid
+    # --------------------------------------------------------
+    try:
         material_bid_id = await create_material_bid_from_email(
             inbound_email_id=inbound_email_id,
             db=db,
         )
-
-        if material_bid_id:
-            try:
-                await parse_material_bid(material_bid_id, db)
-            except Exception:
-                logger.exception("Bid parsing failed")
-                await db.rollback()  # 🔥 CRITICAL FIX
-            else:
-                await db.commit()
-
     except Exception:
         await db.rollback()
-        logger.exception("Inbound processing failed")
+        logger.exception("Material bid creation failed")
         return {"status": "error"}
 
     # --------------------------------------------------------
-    # 5️⃣ Client forwarding (NEW CLEAN TRANSACTION)
+    # 4️⃣ Parse material bid (safe + isolated)
     # --------------------------------------------------------
-    try:
-        client = await db.execute(
-            text("""
-                SELECT email
-                FROM user_profiles
-                WHERE id = (
-                    SELECT user_id
-                    FROM project_requests
-                    WHERE id = :pid
-                )
-            """),
-            {"pid": project_id},
-        )
-
-        client_row = client.mappings().first()
-
-        if client_row:
-            await forward_vendor_reply_to_client(
-                client_row["email"],
-                from_email,
-                subject,
-                text_body or html_body,
-            )
-
-        await db.commit()
-
-    except Exception:
-        await db.rollback()
-        logger.exception("Client forward failed")
+    if material_bid_id:
+        try:
+            await parse_material_bid(material_bid_id)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("Material bid parsing failed")
 
     return {"status": "ok"}
