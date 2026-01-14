@@ -131,7 +131,7 @@ async def inbound_email(
 
         if material_bid_id:
             try:
-                await parse_material_bid(material_bid_id)
+                await parse_material_bid(material_bid_id, db)
             except Exception:
                 logger.exception("Bid parsing failed")
                 await db.rollback()  # 🔥 CRITICAL FIX
