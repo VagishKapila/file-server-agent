@@ -133,3 +133,32 @@ def merge_with_anchors(
         merged.append(v)
 
     return merged
+# --------------------------------------------------
+# SAFE STUB: Vendor Reputation (Phase 0)
+# --------------------------------------------------
+
+async def get_vendor_scores(
+    *,
+    db,
+    vendor_emails: list[str],
+):
+    """
+    Phase 0 stub.
+    Returns neutral scores for all vendors.
+
+    Later phases will:
+    - use response rates
+    - email/call success
+    - language match
+    - project relevance
+    """
+
+    return {
+        email: {
+            "score": 0,
+            "response_rate": None,
+            "preferred": False,
+        }
+        for email in vendor_emails
+    }
+
