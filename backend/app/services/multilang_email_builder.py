@@ -14,3 +14,22 @@ def build_multilang_email(country_code: str, body_en: str):
 Best regards,
 Procurement Team
 """
+
+# --------------------------------------------------
+# SAFE STUB: Language Detection (Phase 0)
+# --------------------------------------------------
+
+def detect_language(text: str | None = None) -> str:
+    """
+    Phase 0 stub.
+    Always returns English.
+
+    Future phases may:
+    - use langdetect
+    - use OpenAI
+    - use vendor country
+    - use website language
+    """
+
+    return "en"
+
