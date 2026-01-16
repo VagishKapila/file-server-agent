@@ -206,3 +206,33 @@ async def search_subcontractors(
     )
 
     return merged
+
+    # ------------------------------
+# TEMPORARY SAFE MATCH ADAPTER
+# ------------------------------
+
+async def match_vendors(
+    *,
+    db,
+    project_request_id: int,
+    trades: list[str],
+    address: str | None = None,
+    request_type: str = "commercial",
+    preferred_only: bool = False,
+):
+    """
+    Phase 1: Vendor discovery only.
+    No outreach. No ranking. No calls.
+    Returns empty list or known vendors if already stored.
+
+    This is intentionally conservative.
+    """
+
+    # For now, do NOT block pipeline
+    # Later this will:
+    # - query vendors table
+    # - check commercial vs residential
+    # - apply preferred vendor weighting
+    # - return ranked candidates
+
+    return []
