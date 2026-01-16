@@ -1,98 +1,150 @@
-# app/services/vendor_orchestrator.py
-"""
-Vendor Orchestrator
--------------------
-Pure decision layer:
-- Collect vendors from preferred, drawing, DB, Google/Yelp
-- Normalize + rank
-- Decide language + call/email eligibility
-NO outreach. NO DB mutation (except optional reads).
-"""
-
-from typing import List, Dict, Optional
+from fastapi import APIRouter, HTTPException, Response, Depends
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from datetime import datetime
+import json
 
-from app.services.match_engine import match_vendors
-from app.services.vendor_reputation import get_vendor_scores
-from app.services.multilang_email_builder import detect_language
-from app.routes.vendors import get_preferred_vendors_for_user
+from ..db import get_db
+
+router = APIRouter(prefix="/vendors", tags=["vendors"])
+
+# ---------------------------------------------------------
+# Utility: detect country from phone number
+# ---------------------------------------------------------
+def detect_country_from_phone(phone: str | None):
+    if not phone:
+        return "USA"
+
+    digits = phone.replace(" ", "").replace("-", "").strip()
+
+    if digits.startswith("+1") or (len(digits) == 10 and digits.isdigit()):
+        return "USA"
+
+    if digits.startswith("+91") or (len(digits) == 10 and digits[0] in "987"):
+        return "India"
+
+    if digits.startswith("+44"):
+        return "United Kingdom"
+
+    return "USA"
 
 
-async def orchestrate_vendors(
-    *,
+# ---------------------------------------------------------
+# Pydantic model incoming
+# ---------------------------------------------------------
+class VendorIn(BaseModel):
+    user_id: str
+    name: str
+    phone: str | None = None
+    trade: str | None = None
+    city: str | None = None
+    state: str | None = ""
+    country: str | None = "USA"
+
+
+# ---------------------------------------------------------
+# Normalize city, state, country
+# ---------------------------------------------------------
+def normalize_location(city: str | None, state: str | None, country: str | None):
+    city = (city or "").strip()
+    state = (state or "").strip()
+    country = (country or "").strip() if country else "USA"
+
+    known_map = {
+        "san jose": ("CA", "USA"),
+        "fremont": ("CA", "USA"),
+        "oakland": ("CA", "USA"),
+        "san francisco": ("CA", "USA"),
+        "toronto": ("ON", "Canada"),
+        "vancouver": ("BC", "Canada"),
+    }
+
+    key = city.lower()
+    if key in known_map:
+        state, country = known_map[key]
+
+    return city, state, country
+
+
+# ---------------------------------------------------------
+# API: GET preferred vendors
+# ---------------------------------------------------------
+@router.get("/")
+async def get_preferred(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        text("""
+            SELECT id, user_id, name, phone, trade, city, state, country, created_at
+            FROM preferred_vendors
+            WHERE user_id = :user_id
+            ORDER BY created_at DESC
+        """),
+        {"user_id": user_id},
+    )
+
+    return [dict(row) for row in result.mappings().all()]
+
+
+# ---------------------------------------------------------
+# API: ADD vendor
+# ---------------------------------------------------------
+@router.post("/add")
+async def add_vendor(
+    data: VendorIn,
+    db: AsyncSession = Depends(get_db),
+):
+    city, state, normalized_country = normalize_location(
+        data.city, data.state, data.country
+    )
+    country = detect_country_from_phone(data.phone) or normalized_country
+
+    result = await db.execute(
+        text("""
+            INSERT INTO preferred_vendors (user_id, name, phone, trade, city, state, country)
+            VALUES (:user_id, :name, :phone, :trade, :city, :state, :country)
+            RETURNING id, user_id, name, phone, trade, city, state, country, created_at
+        """),
+        {
+            "user_id": data.user_id,
+            "name": data.name,
+            "phone": data.phone,
+            "trade": data.trade,
+            "city": city,
+            "state": state,
+            "country": country,
+        },
+    )
+
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=500, detail="Vendor insert failed")
+
+    await db.commit()
+    return dict(row)
+
+
+# ---------------------------------------------------------
+# SERVICE HELPER (✅ THIS FIXES THE CRASH)
+# ---------------------------------------------------------
+async def get_preferred_vendors_for_user(
     db: AsyncSession,
-    project_request_id: int,
     user_id: int,
-    trades: List[str],
-    address: Optional[str],
-    request_type: str,
-) -> List[Dict]:
+):
     """
-    Returns ordered vendor candidates with metadata for UI + outreach layer.
+    Internal service helper.
+    Safe to import into orchestrators.
     """
-
-    vendors: List[Dict] = []
-
-    # 1️⃣ Preferred vendors (highest priority)
-    preferred = await get_preferred_vendors_for_user(db, user_id)
-    for v in preferred:
-        vendors.append({
-            "vendor_id": f"preferred:{v['id']}",
-            "name": v["name"],
-            "trade": v["trade"],
-            "email": None,
-            "phone": v["phone"],
-            "source": "preferred",
-        })
-
-    # 2️⃣ Discovered vendors (DB + Google + Yelp)
-    discovered = await match_vendors(
-        db=db,
-        trades=trades,
-        location=address,
+    result = await db.execute(
+        text("""
+            SELECT id, name, phone, trade, city, state, country
+            FROM preferred_vendors
+            WHERE user_id = :user_id
+            ORDER BY created_at DESC
+        """),
+        {"user_id": user_id},
     )
 
-    for d in discovered:
-        vendors.append({
-            "vendor_id": f"search:{d['id']}",
-            "name": d["vendor_name"],
-            "trade": d["trade"],
-            "email": d.get("email"),
-            "phone": d.get("phone"),
-            "source": d.get("source", "google"),
-        })
-
-    # 3️⃣ Reputation / response scoring
-    scores = await get_vendor_scores(db, trades)
-
-    enriched = []
-    for v in vendors:
-        score = scores.get(v["name"], 50)
-
-        language = detect_language(
-            email=v.get("email"),
-            phone=v.get("phone"),
-            source=v.get("source"),
-        )
-
-        callable_flag = bool(v.get("phone")) and language == "en"
-
-        enriched.append({
-            **v,
-            "language": language,
-            "callable": callable_flag,
-            "auto_queued": True,
-            "visible": True,
-            "priority_score": score,
-        })
-
-    # 4️⃣ Final ordering
-    enriched.sort(
-        key=lambda x: (
-            x["source"] != "preferred",
-            not x["callable"],
-            -x["priority_score"],
-        )
-    )
-
-    return enriched
+    return [dict(row) for row in result.mappings().all()]
