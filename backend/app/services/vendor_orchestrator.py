@@ -19,14 +19,12 @@ async def orchestrate_vendors(
     request_type: str = "commercial",
 ) -> List[Dict[str, Any]]:
     """
-    Vendor discovery + ranking ONLY.
-    NO outreach. NO calls. NO emails.
-
-    This is intentionally safe-by-default.
+    Vendor discovery ONLY.
+    No calls, no emails, no WhatsApp.
     """
 
     logger.info(
-        "🔍 Orchestrating vendors",
+        "Vendor orchestration started",
         extra={
             "project_request_id": project_request_id,
             "user_id": user_id,
@@ -36,12 +34,12 @@ async def orchestrate_vendors(
         },
     )
 
-    # 1️⃣ Normalize trades
+    # Normalize trades
     clean_trades = [t.strip() for t in trades if t and t.strip()]
     if not clean_trades:
         return []
 
-    # 2️⃣ Discover vendors (Google + Yelp + DB merge)
+    # Discover vendors
     vendors = await match_engine_safe(
         db=db,
         trades=clean_trades,
@@ -49,13 +47,13 @@ async def orchestrate_vendors(
         project_request_id=project_request_id,
     )
 
-    # 3️⃣ Mark safe flags (NO outreach yet)
+    # Safe flags (no outreach yet)
     for v in vendors:
         v["auto_queued"] = True
         v["outreach_enabled"] = False
 
     logger.info(
-        "✅ Vendor orchestration complete",
+        "Vendor orchestration complete",
         extra={"count": len(vendors)},
     )
 
