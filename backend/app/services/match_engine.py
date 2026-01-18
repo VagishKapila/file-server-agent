@@ -236,11 +236,6 @@ async def match_vendors(
     # - return ranked candidates
 
     return []
-
-# ===============================
-# SAFE WRAPPER (DO NOT REMOVE)
-# ===============================
-
 from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -255,12 +250,14 @@ async def match_engine_safe(
     """
     Safe wrapper for vendor discovery.
     No outreach. No calls. No emails.
+
+    Uses existing, battle-tested pipeline.
     """
 
-    # Existing function already in this file
-    return await match_engine(
-        db=db,
+    return await search_subcontractors(
         trades=trades,
-        location=address,
-        project_request_id=project_request_id,
+        radius=None,
+        preferred=[],
+        location=address or "",
+        db=db,
     )
